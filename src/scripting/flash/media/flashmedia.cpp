@@ -128,7 +128,7 @@ bool Video::renderImpl(RenderContext& ctxt) const
 		//Enable YUV to RGB conversion
 		//width and height will not change now (the Video mutex is acquired)
 		ctxt.renderTextured(netStream->getTexture(), 0, 0, width, height,
-			clippedAlpha(), RenderContext::YUV_MODE);
+			clippedAlpha(), RenderContext::YUV_MODE,totalMatrix.getRotation(),0,0,width,height,totalMatrix.getScaleX(),totalMatrix.getScaleY(),false,false);
 		
 		netStream->unlock();
 		return false;
@@ -748,7 +748,13 @@ void SoundChannel::jobFence()
 		RELEASE_WRITE(stopped,false);
 		RELEASE_WRITE(terminated,false);
 	}
-	this->decRef();
+	// ensure that this is moved to freelist in vm thread
+	if (getVm(getSystemState()))
+	{
+		getVm(getSystemState())->addDeletableObject(this);
+	}
+	else
+		this->decRef();
 }
 
 void SoundChannel::threadAbort()

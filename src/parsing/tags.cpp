@@ -1220,11 +1220,16 @@ ASObject* DefineTextTag::instance(Class_base* c)
 	if(tokens.empty())
 		computeCached();
 
-	if(c==NULL)
+	if(c==nullptr)
 		c=Class<StaticText>::getClass(loadedFrom->getSystemState());
 
-	StaticText* ret=new (c->memoryAccount) StaticText(c, tokens);
+	StaticText* ret=new (c->memoryAccount) StaticText(c, tokens,TextBounds);
 	return ret;
+}
+MATRIX DefineTextTag::MapToBounds(const MATRIX &mat)
+{
+	MATRIX m (1,1,0,0,TextBounds.Xmin/20,TextBounds.Ymin/20);
+	return mat.multiplyMatrix(m);
 }
 
 void DefineTextTag::computeCached() const
@@ -1232,7 +1237,7 @@ void DefineTextTag::computeCached() const
 	if(!tokens.empty())
 		return;
 
-	const FontTag* curFont = NULL;
+	const FontTag* curFont = nullptr;
 	std::list<FILLSTYLE> fillStyles;
 	Vector2 curPos;
 	FILLSTYLE fs(1);
@@ -1249,11 +1254,9 @@ void DefineTextTag::computeCached() const
 	const int twipsScaling = 1024*20;
 	const int pixelScaling = 1024*20*20;
 
-	// Scale the translation component of TextMatrix. -1 because
-	// removes the unscaled translation first.
+	// Scale the translation component of TextMatrix.
 	MATRIX scaledTextMatrix = TextMatrix;
-	scaledTextMatrix.translate((pixelScaling-1)*TextMatrix.getTranslateX(),
-				   (pixelScaling-1)*TextMatrix.getTranslateY());
+	scaledTextMatrix.translate((TextMatrix.getTranslateX()-TextBounds.Xmin/20) *pixelScaling,(TextMatrix.getTranslateY()-TextBounds.Ymin/20) *pixelScaling);
 
 	for(size_t i=0; i< TextRecords.size();++i)
 	{
@@ -1270,11 +1273,11 @@ void DefineTextTag::computeCached() const
 		}
 		if(TextRecords[i].StyleFlagsHasXOffset)
 		{
-					curPos.x = TextRecords[i].XOffset;
+			curPos.x = TextRecords[i].XOffset;
 		}
 		if(TextRecords[i].StyleFlagsHasYOffset)
 		{
-					curPos.y = TextRecords[i].YOffset;
+			curPos.y = TextRecords[i].YOffset;
 		}
 		/*
 		 * In DefineFont3Tags, shape's coordinates are 1024*20 times pixels size,
@@ -1290,9 +1293,9 @@ void DefineTextTag::computeCached() const
 			Vector2 glyphPos = curPos*twipsScaling;
 
 			MATRIX glyphMatrix(scaling, scaling, 0, 0, 
-					   glyphPos.x,
-					   glyphPos.y);
-			
+						glyphPos.x,
+						glyphPos.y);
+
 			//Apply glyphMatrix first, then scaledTextMatrix
 			glyphMatrix = scaledTextMatrix.multiplyMatrix(glyphMatrix);
 
@@ -1302,31 +1305,49 @@ void DefineTextTag::computeCached() const
 	}
 }
 
-DefineShapeTag::DefineShapeTag(RECORDHEADER h,int v,RootMovieClip* root):DictionaryTag(h,root),Shapes(v)
+DefineShapeTag::DefineShapeTag(RECORDHEADER h,int v,RootMovieClip* root):DictionaryTag(h,root),Shapes(v),tokens(nullptr)
 {
 }
 
-DefineShapeTag::DefineShapeTag(RECORDHEADER h, std::istream& in,RootMovieClip* root):DictionaryTag(h,root),Shapes(1)
+DefineShapeTag::DefineShapeTag(RECORDHEADER h, std::istream& in,RootMovieClip* root):DictionaryTag(h,root),Shapes(1),tokens(nullptr)
 {
 	LOG(LOG_TRACE,_("DefineShapeTag"));
 	in >> ShapeId >> ShapeBounds >> Shapes;
 }
 
+DefineShapeTag::~DefineShapeTag()
+{
+	if (tokens)
+		delete tokens;
+}
+
 ASObject *DefineShapeTag::instance(Class_base *c)
 {
-	if(c==NULL)
+	if(c==nullptr)
 	{
 		if (!loadedFrom->usesActionScript3)
 			c=Class<AVM1Shape>::getClass(loadedFrom->getSystemState());
 		else
 			c=Class<Shape>::getClass(loadedFrom->getSystemState());
 	}
-	tokensVector tokens(reporter_allocator<GeomToken>(loadedFrom->getSystemState()->tagsMemory));
-	TokenContainer::FromShaperecordListToShapeVector(Shapes.ShapeRecords,tokens,Shapes.FillStyles.FillStyles,MATRIX(),Shapes.LineStyles.LineStyles2);
+	if (!tokens)
+	{
+		tokens = new tokensVector(loadedFrom->getSystemState()->tagsMemory);
+		for (auto it = Shapes.FillStyles.FillStyles.begin(); it != Shapes.FillStyles.FillStyles.end(); it++)
+		{
+			it->ShapeBounds = ShapeBounds;
+		}
+		TokenContainer::FromShaperecordListToShapeVector(Shapes.ShapeRecords,*tokens,Shapes.FillStyles.FillStyles,MATRIX(),Shapes.LineStyles.LineStyles2,ShapeBounds);
+	}
 	Shape* ret= loadedFrom->usesActionScript3 ?
-				new (c->memoryAccount) Shape(c, tokens, 1.0f/20.0f):
-				new (c->memoryAccount) AVM1Shape(c, tokens, 1.0f/20.0f);
+				new (c->memoryAccount) Shape(c, *tokens, 1.0f/20.0f,ShapeId,ShapeBounds):
+				new (c->memoryAccount) AVM1Shape(c, *tokens, 1.0f/20.0f,ShapeId,ShapeBounds);
 	return ret;
+}
+MATRIX DefineShapeTag::MapToBoundsForButton(const MATRIX &mat)
+{
+	MATRIX m (1,1,0,0,ShapeBounds.Xmin/20,ShapeBounds.Ymin/20);
+	return mat.multiplyMatrix(m);
 }
 
 DefineShape2Tag::DefineShape2Tag(RECORDHEADER h, std::istream& in,RootMovieClip* root):DefineShapeTag(h,2,root)
@@ -1552,6 +1573,13 @@ void PlaceObject2Tag::execute(DisplayObjectContainer* parent, bool inskipping)
 
 		if(placedTag==nullptr)
 		{
+			// tag for CharacterID may be defined after this tag was defined, so we look for it again in the dictionary
+			RootMovieClip* root = parent->getRoot().getPtr();
+			if (root)
+				placedTag=root->dictionaryLookup(CharacterId);
+		}
+		if(placedTag==nullptr)
+		{
 			LOG(LOG_ERROR,"no tag to place:"<<CharacterId);
 			throw RunTimeException("No tag to place");
 		}
@@ -1624,7 +1652,20 @@ void PlaceObject2Tag::execute(DisplayObjectContainer* parent, bool inskipping)
 	}
 	else if (PlaceFlagHasMatrix)
 	{
-		parent->transformLegacyChildAt(LEGACY_DEPTH_START+Depth,Matrix);
+		if(placedTag==nullptr && currchar)
+		{
+			// tag for CharacterID may be defined after this tag was defined, so we look for it again in the dictionary
+			RootMovieClip* root = parent->getRoot().getPtr();
+			if (root)
+				placedTag=root->dictionaryLookup(currchar->getTagID());
+		}
+		if (placedTag)
+			parent->transformLegacyChildAt(LEGACY_DEPTH_START+Depth,placedTag->MapToBounds(Matrix));
+		else
+		{
+			LOG(LOG_ERROR,"transformLegacyChild for object without placedTag");
+			parent->transformLegacyChildAt(LEGACY_DEPTH_START+Depth,Matrix);
+		}
 	}
 	if (exists && (currchar->getTagID() == CharacterId) && nameID) // reuse name of existing DispayObject at this depth
 	{
@@ -1814,7 +1855,7 @@ void PlaceObject3Tag::setProperties(DisplayObject *obj, DisplayObjectContainer *
 	if (this->SurfaceFilterList.Filters.size())
 	{
 		if (obj->filters.isNull())
-			obj->filters = _MR(Class<Array>::getInstanceSNoArgs(obj->getSystemState()));
+			obj->filters = _MR(Class<Array>::getInstanceSNoArgsNoFreelist(obj->getSystemState()));
 		auto it = this->SurfaceFilterList.Filters.begin();
 		while (it != this->SurfaceFilterList.Filters.end())
 		{
@@ -2008,7 +2049,7 @@ ASObject* DefineButtonTag::instance(Class_base* c)
 			DisplayObject* state=dynamic_cast<DisplayObject*>(dict->instance());
 			assert_and_throw(state);
 			//The matrix must be set before invoking the constructor
-			state->setLegacyMatrix(dict->MapToBounds(i->PlaceMatrix));
+			state->setLegacyMatrix(dict->MapToBoundsForButton(i->PlaceMatrix));
 			
 			state->name = BUILTIN_STRINGS::EMPTY;
 			if (i->ButtonHasBlendMode && i->buttonVersion == 2)
@@ -2018,7 +2059,7 @@ ASObject* DefineButtonTag::instance(Class_base* c)
 			if (i->ColorTransform.isfilled())
 				state->colorTransform=_NR<ColorTransform>(Class<ColorTransform>::getInstanceS(state->getSystemState(),i->ColorTransform));
 
-			if(states[j] == NULL)
+			if(states[j] == nullptr)
 			{
 				states[j] = state;
 				curDepth[j] = i->PlaceDepth;
@@ -2040,7 +2081,7 @@ ASObject* DefineButtonTag::instance(Class_base* c)
 	}
 	Class_base* realClass=(c)?c:bindedTo;
 
-	if(realClass==NULL)
+	if(realClass==nullptr)
 	{
 		if (!loadedFrom->usesActionScript3)
 			realClass=Class<AVM1SimpleButton>::getClass(loadedFrom->getSystemState());
@@ -2066,7 +2107,7 @@ DefineVideoStreamTag::DefineVideoStreamTag(RECORDHEADER h, std::istream& in, Roo
 
 ASObject* DefineVideoStreamTag::instance(Class_base* c)
 {
-	Class_base* classRet = NULL;
+	Class_base* classRet = nullptr;
 	if(c)
 		classRet=c;
 	else if(bindedTo)

@@ -91,14 +91,14 @@ number_t DisplayObject::getNominalHeight()
 
 bool DisplayObject::Render(RenderContext& ctxt, bool force)
 {
-	if(!isConstructed() || (!force && !visible) || clippedAlpha()==0.0 || ClipDepth)
+	if(!isConstructed() || (!force && !visible) || clippedAlpha()==0.0)
 		return false;
 	return renderImpl(ctxt);
 }
 
 DisplayObject::DisplayObject(Class_base* c):EventDispatcher(c),matrix(Class<Matrix>::getInstanceS(c->getSystemState())),tx(0),ty(0),rotation(0),
-	sx(1),sy(1),alpha(1.0),blendMode(BLENDMODE_NORMAL),isLoadedRoot(false),ClipDepth(0),maskOf(),parent(nullptr),eventparent(nullptr),constructed(false),useLegacyMatrix(true),onStage(false),
-	visible(true),mask(),invalidateQueueNext(),loaderInfo(),hasChanged(true),legacy(false),flushstep(0),cacheAsBitmap(false),
+	sx(1),sy(1),alpha(1.0),blendMode(BLENDMODE_NORMAL),isLoadedRoot(false),ClipDepth(0),maskOf(),parent(nullptr),constructed(false),useLegacyMatrix(true),onStage(false),
+	visible(true),mask(),invalidateQueueNext(),loaderInfo(),hasChanged(true),needsTextureRecalculation(true),legacy(false),flushstep(0),cacheAsBitmap(false),
 	name(BUILTIN_STRINGS::EMPTY)
 {
 	subtype=SUBTYPE_DISPLAYOBJECT;
@@ -112,13 +112,14 @@ void DisplayObject::finalize()
 	EventDispatcher::finalize();
 	maskOf.reset();
 	parent=nullptr;
-	eventparent =nullptr;
+	eventparentmap.clear();
 	mask.reset();
 	matrix.reset();
 	loaderInfo.reset();
 	invalidateQueueNext.reset();
 	accessibilityProperties.reset();
 	hasChanged = true;
+	needsTextureRecalculation=true;
 }
 
 bool DisplayObject::destruct()
@@ -126,13 +127,14 @@ bool DisplayObject::destruct()
 	// TODO make all DisplayObject derived classes reusable
 	maskOf.reset();
 	parent=nullptr;
-	eventparent =nullptr;
+	eventparentmap.clear();
 	mask.reset();
 	matrix.reset();
 	loaderInfo.reset();
 	invalidateQueueNext.reset();
 	accessibilityProperties.reset();
 	hasChanged = true;
+	needsTextureRecalculation=true;
 	tx=0;
 	ty=0;
 	rotation=0;
@@ -150,6 +152,8 @@ bool DisplayObject::destruct()
 	legacy=false;
 	cacheAsBitmap=false;
 	name=BUILTIN_STRINGS::EMPTY;
+	for (auto it = avm1variables.begin(); it != avm1variables.end(); it++)
+		ASATOM_DECREF(it->second);
 	avm1variables.clear();
 	variablebindings.clear();
 	avm1functions.clear();
@@ -346,6 +350,7 @@ void DisplayObject::setMask(_NR<DisplayObject> m)
 	if(mustInvalidate && onStage)
 	{
 		hasChanged=true;
+		needsTextureRecalculation=true;
 		requestInvalidation(getSystemState());
 	}
 }
@@ -389,22 +394,27 @@ float DisplayObject::getConcatenatedAlpha() const
 		return parent->getConcatenatedAlpha()*clippedAlpha();
 }
 
-void DisplayObject::onNewEvent()
+void DisplayObject::onNewEvent(Event* ev)
 {
-	eventparent = parent;
-	if (eventparent)
+	Locker locker(spinlock);
+	if (parent && parent->getInDestruction())
+		return;
+	if (parent)
 	{
-		eventparent->incRef();
+		eventparentmap[ev] =parent;
+		parent->incRef();
 	}
 }
 
-void DisplayObject::afterHandleEvent()
+void DisplayObject::afterHandleEvent(Event *ev)
 {
-	if (eventparent)
+	Locker locker(spinlock);
+	auto it = eventparentmap.find(ev);
+	if (it != eventparentmap.end())
 	{
-		eventparent->decRef();
+		it->second->decRef();
+		eventparentmap.erase(it);
 	}
-	eventparent =nullptr;
 }
 
 tiny_string DisplayObject::AVM1GetPath()
@@ -421,15 +431,18 @@ tiny_string DisplayObject::AVM1GetPath()
 	return res;
 }
 
-MATRIX DisplayObject::getMatrix() const
+MATRIX DisplayObject::getMatrix(bool includeRotation) const
 {
 	Locker locker(spinlock);
 	//Start from the residual matrix and construct the whole one
 	MATRIX ret;
 	if (!matrix.isNull())
 		ret=matrix->matrix;
-	ret.scale(sx,sy);
-	ret.rotate(rotation*M_PI/180.0);
+	if (includeRotation)
+	{
+		ret.scale(sx,sy);
+		ret.rotate(rotation*M_PI/180.0);
+	}
 	ret.translate(tx,ty);
 	return ret;
 }
@@ -454,7 +467,7 @@ void DisplayObject::extractValuesFromMatrix()
 
 bool DisplayObject::skipRender() const
 {
-	return visible==false || clippedAlpha()==0.0 || ClipDepth;
+	return !isMask() && !ClipDepth && (visible==false || clippedAlpha()==0.0);
 }
 
 bool DisplayObject::defaultRender(RenderContext& ctxt) const
@@ -466,7 +479,9 @@ bool DisplayObject::defaultRender(RenderContext& ctxt) const
 	 * so we need no locking here */
 	if(!surface.tex.isValid() || flushstep == getSystemState()->currentflushstep)
 		return flushstep == getSystemState()->currentflushstep;
-
+	if (surface.tex.width == 0 || surface.tex.height == 0)
+		return true;
+	
 	AS_BLENDMODE bl = this->blendMode;
 	if (bl == BLENDMODE_NORMAL)
 	{
@@ -478,11 +493,12 @@ bool DisplayObject::defaultRender(RenderContext& ctxt) const
 		}
 	}
 	ctxt.setProperties(bl);
-
 	ctxt.lsglLoadIdentity();
-	ctxt.renderTextured(surface.tex, surface.xOffset, surface.yOffset,
+	ctxt.renderTextured(surface.tex, surface.xOffset,surface.yOffset,
 			surface.tex.width, surface.tex.height,
-			surface.alpha, RenderContext::RGB_MODE);
+			surface.alpha, RenderContext::RGB_MODE,
+			surface.rotation,surface.xOffsetTransformed,surface.yOffsetTransformed,surface.widthTransformed,surface.heightTransformed,surface.xscale, surface.yscale,
+			surface.isMask, surface.hasMask);
 	return false;
 }
 
@@ -524,11 +540,28 @@ IDrawable* DisplayObject::invalidate(DisplayObject* target, const MATRIX& initia
 	throw RunTimeException("DisplayObject::invalidate");
 }
 
-void DisplayObject::requestInvalidation(InvalidateQueue* q)
+void DisplayObject::requestInvalidation(InvalidateQueue* q, bool forceTextureRefresh)
 {
 	//Let's invalidate also the mask
 	if(!mask.isNull())
 		mask->requestInvalidation(q);
+}
+
+void DisplayObject::updateCachedSurface(IDrawable *d)
+{
+	// this is called only from rendering thread, so no locking done here
+	cachedSurface.xOffset=d->getXOffset();
+	cachedSurface.yOffset=d->getYOffset();
+	cachedSurface.xOffsetTransformed=d->getXOffsetTransformed();
+	cachedSurface.yOffsetTransformed=d->getYOffsetTransformed();
+	cachedSurface.widthTransformed=d->getWidthTransformed();
+	cachedSurface.heightTransformed=d->getHeightTransformed();
+	cachedSurface.alpha=d->getAlpha();
+	cachedSurface.rotation=d->getRotation();
+	cachedSurface.xscale=d->getXScale();
+	cachedSurface.yscale=d->getYScale();
+	cachedSurface.isMask=d->getIsMask();
+	cachedSurface.hasMask=d->getHasMask();
 }
 //TODO: Fix precision issues, Adobe seems to do the matrix mult with twips and rounds the results, 
 //this way they have less pb with precision.
@@ -846,12 +879,12 @@ ASFUNCTIONBODY_ATOM(DisplayObject,_getBounds)
 	//Compute the transformation matrix
 	MATRIX m;
 	DisplayObject* cur=th;
-	while(cur!=NULL && cur!=target)
+	while(cur!=nullptr && cur!=target)
 	{
 		m = cur->getMatrix().multiplyMatrix(m);
 		cur=cur->parent;
 	}
-	if(cur==NULL)
+	if(cur==nullptr)
 	{
 		//We crawled all the parent chain without finding the target
 		//The target is unrelated, compute it's transformation matrix
@@ -1028,6 +1061,7 @@ ASFUNCTIONBODY_ATOM(DisplayObject,_setRotation)
 
 void DisplayObject::setParent(DisplayObjectContainer *p)
 {
+	Locker locker(spinlock);
 	if(parent!=p)
 	{
 		parent=p;
@@ -1272,6 +1306,7 @@ void DisplayObject::afterConstruction()
 		loaderInfo->objectHasLoaded(_MR(this));
 	}
 	hasChanged=true;
+	needsTextureRecalculation=true;
 	if(onStage)
 		requestInvalidation(getSystemState());
 }
@@ -1297,15 +1332,15 @@ void DisplayObject::gatherMaskIDrawables(std::vector<IDrawable::MaskData>& masks
 		{
 			DisplayObject* target=(*it).getPtr();
 			//Get the drawable from each of the added objects
-			IDrawable* drawable=target->invalidate(NULL, MATRIX(),false);
-			if(drawable==NULL)
+			IDrawable* drawable=target->invalidate(nullptr, MATRIX(),false);
+			if(drawable==nullptr)
 				continue;
 			masks.emplace_back(drawable, maskMode);
 		}
 	}
 	else
 	{
-		IDrawable* drawable=NULL;
+		IDrawable* drawable=nullptr;
 		if(mask->is<DisplayObjectContainer>())
 		{
 			//HACK: use bitmap temporarily
@@ -1325,30 +1360,33 @@ void DisplayObject::gatherMaskIDrawables(std::vector<IDrawable::MaskData>& masks
 			//The created bitmap is already correctly scaled and rotated
 			//Just apply the needed offset
 			MATRIX m2(1,1,0,0,xmin,ymin);
-			drawable=bmp->invalidate(NULL, m2,false);
+			drawable=bmp->invalidate(nullptr, m2,false);
 		}
 		else
-			drawable=mask->invalidate(NULL, MATRIX(),false);
+			drawable=mask->invalidate(nullptr, MATRIX(),false);
 
-		if(drawable==NULL)
+		if(drawable==nullptr)
 			return;
 		masks.emplace_back(drawable, maskMode);
 	}
 }
 
-void DisplayObject::computeMasksAndMatrix(DisplayObject* target, std::vector<IDrawable::MaskData>& masks, MATRIX& totalMatrix) const
+void DisplayObject::computeMasksAndMatrix(DisplayObject* target, std::vector<IDrawable::MaskData>& masks, MATRIX& totalMatrix,bool includeRotation, bool &isMask, bool &hasMask) const
 {
 	const DisplayObject* cur=this;
 	bool gatherMasks = true;
+	isMask = false;
+	hasMask = false;
 	while(cur && cur!=target)
 	{
-		totalMatrix=cur->getMatrix().multiplyMatrix(totalMatrix);
-		//Get an IDrawable for all the hierarchy of each mask.
+		totalMatrix=cur->getMatrix(includeRotation).multiplyMatrix(totalMatrix);
 		if(gatherMasks)
 		{
-			if(cur->maskOf.isNull())
-				cur->gatherMaskIDrawables(masks);
-			else
+			if (!cur->mask.isNull())
+				hasMask=true;
+			if (cur->ClipDepth)
+				isMask=true;
+			if(!cur->maskOf.isNull())
 			{
 				//Stop gathering masks if any level of the hierarchy it's a mask
 				masks.clear();
@@ -1519,6 +1557,14 @@ bool DisplayObject::deleteVariableByMultiname(const multiname& name)
 		
 	}
 	return res;
+}
+void DisplayObject::removeAVM1Listeners()
+{
+	getSystemState()->stage->AVM1RemoveMouseListener(this);
+	getSystemState()->stage->AVM1RemoveKeyboardListener(this);
+	getSystemState()->stage->AVM1RemoveEventListener(this);
+	this->incRef();
+	getSystemState()->unregisterFrameListener(_MR(this));
 }
 
 ASFUNCTIONBODY_ATOM(DisplayObject,AVM1_getScaleX)
@@ -1908,10 +1954,14 @@ void DisplayObject::AVM1SetVariable(tiny_string &name, asAtom v)
 		tiny_string localname = name.lowercase();
 		uint32_t nameIdOriginal = getSystemState()->getUniqueStringId(name);
 		uint32_t nameId = getSystemState()->getUniqueStringId(localname);
+		auto it = avm1variables.find(nameId);
+		if (it != avm1variables.end())
+			ASATOM_DECREF(it->second);
 		if (asAtomHandler::isUndefined(v))
 			avm1variables.erase(nameId);
 		else
 		{
+			ASATOM_INCREF(v);
 			avm1variables[nameId] = v;
 			if (asAtomHandler::is<AVM1Function>(v))
 			{
@@ -1930,6 +1980,9 @@ void DisplayObject::AVM1SetVariable(tiny_string &name, asAtom v)
 	{
 		tiny_string localname = name.substr_bytes(pos+1,name.numBytes()-pos-1).lowercase();
 		uint32_t nameId = getSystemState()->getUniqueStringId(localname);
+		auto it = avm1variables.find(nameId);
+		if (it != avm1variables.end())
+			ASATOM_DECREF(it->second);
 		if (asAtomHandler::isUndefined(v))
 			avm1variables.erase(nameId);
 		else
@@ -2069,6 +2122,9 @@ void DisplayObject::setVariableBinding(tiny_string &name, _NR<DisplayObject> obj
 }
 void DisplayObject::AVM1SetFunction(uint32_t nameID, _NR<AVM1Function> obj)
 {
+	auto it = avm1variables.find(nameID);
+	if (it != avm1variables.end())
+		ASATOM_DECREF(it->second);
 	if (obj)
 	{
 		obj->incRef();

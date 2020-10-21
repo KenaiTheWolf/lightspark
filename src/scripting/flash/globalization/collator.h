@@ -17,30 +17,52 @@
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
 **************************************************************************/
 
-#ifndef SCRIPTING_FLASH_GLOBALIZATION_NUMBERFORMATTER_H
-#define SCRIPTING_FLASH_GLOBALIZATION_NUMBERFORMATTER_H 1
+#ifndef SCRIPTING_FLASH_GLOBALIZATION_COLLATOR_H
+#define SCRIPTING_FLASH_GLOBALIZATION_COLLATOR_H 1
 
 #include "asobject.h"
-#include <clocale>
 
 namespace lightspark
 {
 
-class NumberFormatter : public ASObject
+class Collator : public ASObject
 {
 private:
 	std::locale currlocale;
+	tiny_string initialMode;
+	tiny_string sortingMode;
 public:
-	NumberFormatter(Class_base* c);
-	static void sinit(Class_base*);
+	int compare(std::string string1,
+		std::string string2,
+		bool ignoreCase,
+		bool ignoreCharacterWidth,
+		bool ignoreDiacritics,
+		bool ignoreKanaType,
+		bool ignoreSymbols);
+	bool equals(std::string string1,
+		std::string string2,
+		bool ignoreCase,
+		bool ignoreCharacterWidth,
+		bool ignoreDiacritics,
+		bool ignoreKanaType,
+		bool ignoreSymbols);
+	bool isSymbol(uint32_t character);
+	Collator(Class_base* c):ASObject(c){}
+	static void sinit(Class_base* c);
 	ASFUNCTION_ATOM(_constructor);
-	ASFUNCTION_ATOM(formatNumber);
+	ASFUNCTION_ATOM(compare);
+	ASFUNCTION_ATOM(equals);
 	ASFUNCTION_ATOM(getAvailableLocaleIDNames);
 	ASPROPERTY_GETTER(tiny_string, actualLocaleIDName);
+	ASPROPERTY_GETTER_SETTER(bool, ignoreCase);
+	ASPROPERTY_GETTER_SETTER(bool, ignoreCharacterWidth);
+	ASPROPERTY_GETTER_SETTER(bool, ignoreDiacritics);
+	ASPROPERTY_GETTER_SETTER(bool, ignoreKanaType);
+	ASPROPERTY_GETTER_SETTER(bool, ignoreSymbols);
 	ASPROPERTY_GETTER(tiny_string, lastOperationStatus);
+	ASPROPERTY_GETTER_SETTER(bool, numericComparison);
 	ASPROPERTY_GETTER(tiny_string, requestedLocaleIDName);
-	ASPROPERTY_GETTER_SETTER(int, fractionalDigits);
 };
 
 }
-#endif /* SCRIPTING_FLASH_GLOBALIZATION_NUMBERFORMATTER_H */
+#endif /* SCRIPTING_FLASH_GLOBALIZATION_COLLATOR_H */

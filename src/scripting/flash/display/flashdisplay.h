@@ -116,6 +116,10 @@ protected:
 	void setOnStage(bool staged, bool force = false) override;
 	_NR<DisplayObject> hitTestImpl(_NR<DisplayObject> last, number_t x, number_t y, DisplayObject::HIT_TYPE type,bool interactiveObjectsOnly) override;
 	bool boundsRect(number_t& xmin, number_t& xmax, number_t& ymin, number_t& ymax) const override;
+	bool boundsRectWithoutChildren(number_t& xmin, number_t& xmax, number_t& ymin, number_t& ymax) const override
+	{
+		return false;
+	}
 	bool renderImpl(RenderContext& ctxt) const override;
 	virtual void resetToStart() {}
 	ASPROPERTY_GETTER_SETTER(bool, tabChildren);
@@ -124,11 +128,12 @@ public:
 	DisplayObject* findRemovedLegacyChild(uint32_t name);
 	void eraseRemovedLegacyChild(uint32_t name);
 	void LegacyChildRemoveDeletionMark(int32_t depth);
-	void requestInvalidation(InvalidateQueue* q) override;
+	void requestInvalidation(InvalidateQueue* q, bool forceTextureRefresh=false) override;
 	void _addChildAt(_R<DisplayObject> child, unsigned int index);
 	void dumpDisplayList(unsigned int level=0);
 	bool _removeChild(DisplayObject* child);
 	void _removeAllChildren();
+	void removeAVM1Listeners() override;
 	int getChildIndex(_R<DisplayObject> child);
 	DisplayObjectContainer(Class_base* c);
 	bool destruct() override;
@@ -209,7 +214,7 @@ public:
 	void constructionComplete() override;
 	void finalize() override;
 	IDrawable* invalidate(DisplayObject* target, const MATRIX& initialMatrix,bool smoothing) override;
-	void requestInvalidation(InvalidateQueue* q) override;
+	void requestInvalidation(InvalidateQueue* q, bool forceTextureRefresh=false) override;
 	uint32_t getTagID() const override;
 
 	static void sinit(Class_base* c);
@@ -238,8 +243,7 @@ class Shape: public DisplayObject, public TokenContainer
 {
 protected:
 	_NR<Graphics> graphics;
-	bool boundsRect(number_t& xmin, number_t& xmax, number_t& ymin, number_t& ymax) const override
-		{ return TokenContainer::boundsRect(xmin,xmax,ymin,ymax); }
+	bool boundsRect(number_t& xmin, number_t& xmax, number_t& ymin, number_t& ymax) const override;
 	bool renderImpl(RenderContext& ctxt) const override
 		{ return TokenContainer::renderImpl(ctxt); }
 	_NR<DisplayObject> hitTestImpl(_NR<DisplayObject> last, number_t x, number_t y, DisplayObject::HIT_TYPE type,bool interactiveObjectsOnly) override
@@ -248,15 +252,18 @@ protected:
 				this->incRef();
 			return TokenContainer::hitTestImpl(interactiveObjectsOnly ? _NR<DisplayObject>(this) : last,x,y, type); 
 		}
+	uint32_t fromDefineShapeTag;
+	RECT bounds;
 public:
 	Shape(Class_base* c);
-	Shape(Class_base* c, const tokensVector& tokens, float scaling);
+	Shape(Class_base* c, const tokensVector& tokens, float scaling, uint32_t tagID, const RECT& _bounds);
+	uint32_t getTagID() const override { return fromDefineShapeTag; }
 	void finalize() override;
 	static void sinit(Class_base* c);
 	static void buildTraits(ASObject* o);
 	ASFUNCTION_ATOM(_constructor);
 	ASFUNCTION_ATOM(_getGraphics);
-	void requestInvalidation(InvalidateQueue* q) override { TokenContainer::requestInvalidation(q); }
+	void requestInvalidation(InvalidateQueue* q, bool forceTextureRefresh=false) override { TokenContainer::requestInvalidation(q,forceTextureRefresh); }
 	IDrawable* invalidate(DisplayObject* target, const MATRIX& initialMatrix,bool smoothing) override
 	{ return TokenContainer::invalidate(target, initialMatrix,smoothing); }
 };
@@ -282,7 +289,7 @@ public:
 	MorphShape(Class_base* c, DefineMorphShapeTag* _morphshapetag);
 	static void sinit(Class_base* c);
 	static void buildTraits(ASObject* o);
-	void requestInvalidation(InvalidateQueue* q) override { TokenContainer::requestInvalidation(q); }
+	void requestInvalidation(InvalidateQueue* q, bool forceTextureRefresh=false) override { TokenContainer::requestInvalidation(q,forceTextureRefresh); }
 	IDrawable* invalidate(DisplayObject* target, const MATRIX& initialMatrix,bool smoothing) override
 	{ return TokenContainer::invalidate(target, initialMatrix,smoothing); }
 	void checkRatio(uint32_t ratio) override;
@@ -436,6 +443,10 @@ private:
 	_NR<SoundChannel> sound;
 protected:
 	bool boundsRect(number_t& xmin, number_t& xmax, number_t& ymin, number_t& ymax) const override;
+	bool boundsRectWithoutChildren(number_t& xmin, number_t& xmax, number_t& ymin, number_t& ymax) const override
+	{
+		return TokenContainer::boundsRect(xmin,xmax,ymin,ymax);
+	}
 	bool renderImpl(RenderContext& ctxt) const override;
 	_NR<DisplayObject> hitTestImpl(_NR<DisplayObject> last, number_t x, number_t y, DisplayObject::HIT_TYPE type,bool interactiveObjectsOnly) override;
 	void resetToStart() override;
@@ -465,7 +476,7 @@ public:
 	}
 	IDrawable* invalidate(DisplayObject* target, const MATRIX& initialMatrix,bool smoothing) override
 	{ return TokenContainer::invalidate(target, initialMatrix,smoothing); }
-	void requestInvalidation(InvalidateQueue* q) override;
+	void requestInvalidation(InvalidateQueue* q, bool forceTextureRefresh=false) override;
 	_NR<Graphics> getGraphics();
 };
 
@@ -577,9 +588,9 @@ private:
 	bool inExecuteFramescript;
 	bool inAVM1Attachment;
 
-	CLIPACTIONS actions;
 	std::list<Frame>::iterator currentframeIterator;
 protected:
+	const CLIPACTIONS* actions;
 	/* This is read from the SWF header. It's only purpose is for flash.display.MovieClip.totalFrames */
 	uint32_t totalFrames_unreliable;
 	ASPROPERTY_GETTER_SETTER(bool, enabled);
@@ -665,6 +676,7 @@ public:
 	uint32_t internalGetHeight() const;
 	uint32_t internalGetWidth() const;
 private:
+	Mutex avm1listenerMutex;
 	void onAlign(const tiny_string&);
 	void onColorCorrection(const tiny_string&);
 	void onFullScreenSourceRect(_NR<Rectangle>);
@@ -895,7 +907,7 @@ public:
 	bool boundsRect(number_t& xmin, number_t& xmax, number_t& ymin, number_t& ymax) const override;
 	_NR<DisplayObject> hitTestImpl(_NR<DisplayObject> last, number_t x, number_t y, DisplayObject::HIT_TYPE type,bool interactiveObjectsOnly) override;
 	virtual IntSize getBitmapSize() const;
-	void requestInvalidation(InvalidateQueue* q) override { TokenContainer::requestInvalidation(q); }
+	void requestInvalidation(InvalidateQueue* q, bool forceTextureRefresh=false) override { TokenContainer::requestInvalidation(q,forceTextureRefresh); }
 	IDrawable* invalidate(DisplayObject* target, const MATRIX& initialMatrix,bool smoothing) override
 	{ return TokenContainer::invalidate(target, initialMatrix,smoothing); }
 };

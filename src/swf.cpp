@@ -37,6 +37,7 @@
 #include "backends/image.h"
 #include "backends/extscriptobject.h"
 #include "backends/input.h"
+#include "backends/locale.h"
 #include "memory_support.h"
 
 #ifdef ENABLE_CURL
@@ -148,7 +149,8 @@ const URLInfo& RootMovieClip::getBaseURL()
 void SystemState::registerFrameListener(_R<DisplayObject> obj)
 {
 	Locker l(mutexFrameListeners);
-	obj->incRef();
+	if (frameListeners.find(obj) != frameListeners.end())
+		return;
 	frameListeners.insert(obj);
 }
 
@@ -197,7 +199,7 @@ void SystemState::staticDeinit()
 static const char* builtinStrings[] = {"any", "void", "prototype", "Function", "__AS3__.vec","Class", "http://adobe.com/AS3/2006/builtin","http://www.w3.org/XML/1998/namespace","xml","toString","valueOf","length","constructor",
 									   "_target","this","_root","_parent","_global","super",
 									   "onEnterFrame","onMouseMove","onMouseDown","onMouseUp","onPress","onRelease","onReleaseOutside","onMouseWheel","onLoad",
-									   "object","undefined","boolean","number","string","function"
+									   "object","undefined","boolean","number","string","function","onRollOver","onRollOut"
 									  };
 
 extern uint32_t asClassCount;
@@ -300,6 +302,7 @@ SystemState::SystemState(uint32_t fileSize, FLASH_MODE mode):
 	audioManager=NULL;
 	intervalManager=new IntervalManager();
 	securityManager=new SecurityManager();
+	localeManager = new LocaleManager();
 
 	_NR<LoaderInfo> loaderInfo=_MR(Class<LoaderInfo>::getInstanceS(this));
 	loaderInfo->applicationDomain = applicationDomain;
@@ -501,6 +504,8 @@ void SystemState::stopEngines()
 	downloadManager=NULL;
 	delete securityManager;
 	securityManager=NULL;
+	delete localeManager;
+	localeManager=NULL;
 	delete threadPool;
 	threadPool=NULL;
 	delete downloadThreadPool;
@@ -1165,8 +1170,14 @@ void SystemState::flushInvalidationQueue()
 			//Check if the drawable is valid and forge a new job to
 			//render it and upload it to GPU
 			if(d)
-				addJob(new AsyncDrawJob(d,cur,nextflushstep));
+			{
+				if (cur->needsTextureRecalculation)
+					addJob(new AsyncDrawJob(d,cur,nextflushstep));
+				else
+					renderThread->addRefreshableSurface(d,cur);
+			}
 			cur->hasChanged=false;
+			cur->needsTextureRecalculation=false;
 		}
 		_NR<DisplayObject> next=cur->invalidateQueueNext;
 		cur->invalidateQueueNext=NullRef;
@@ -1787,6 +1798,12 @@ void RootMovieClip::constructionComplete()
 {
 	if(isConstructed())
 		return;
+	if (!isVmThread())
+	{
+		this->incRef();
+		getVm(getSystemState())->prependEvent(NullRef,_MR(new (getSystemState()->unaccountedMemory) RootConstructedEvent(_MR(this))));
+		return;
+	}
 	if (this!=getSystemState()->mainClip)
 	{
 		MovieClip::constructionComplete();
@@ -1969,7 +1986,6 @@ void SystemState::tick()
 			auto it=frameListeners.begin();
 			for(;it!=frameListeners.end();it++)
 			{
-				(*it)->incRef();
 				getVm(this)->addEvent(*it,e);
 			}
 		}
@@ -1989,7 +2005,6 @@ void SystemState::tick()
 			auto it=frameListeners.begin();
 			for(;it!=frameListeners.end();it++)
 			{
-				(*it)->incRef();
 				getVm(this)->addEvent(*it,e);
 			}
 		}
@@ -2007,7 +2022,6 @@ void SystemState::tick()
 			auto it=frameListeners.begin();
 			for(;it!=frameListeners.end();it++)
 			{
-				(*it)->incRef();
 				getVm(this)->addEvent(*it,e);
 			}
 		}
@@ -2027,7 +2041,7 @@ void SystemState::tickFence()
 void SystemState::resizeCompleted()
 {
 	stage->hasChanged=true;
-	stage->requestInvalidation(this);
+	stage->requestInvalidation(this,true);
 	
 	if(currentVm && scaleMode==NO_SCALE)
 	{

@@ -20,6 +20,7 @@
 #include <cassert>
 
 #include "swf.h"
+#include "abc.h"
 #include "backends/graphics.h"
 #include "logger.h"
 #include "exceptions.h"
@@ -35,19 +36,19 @@ using namespace lightspark;
 
 TextureChunk::TextureChunk(uint32_t w, uint32_t h)
 {
-	width=w;
-	height=h;
+	width=w+(w/CHUNKSIZE_REAL+1)*2;
+	height=h+(h/CHUNKSIZE_REAL+1)*2;
 	if(w==0 || h==0)
 	{
-		chunks=NULL;
+		chunks=nullptr;
 		return;
 	}
-	const uint32_t blocksW=(w+CHUNKSIZE-1)/CHUNKSIZE;
-	const uint32_t blocksH=(h+CHUNKSIZE-1)/CHUNKSIZE;
+	const uint32_t blocksW=(width+CHUNKSIZE-1)/CHUNKSIZE;
+	const uint32_t blocksH=(height+CHUNKSIZE-1)/CHUNKSIZE;
 	chunks=new uint32_t[blocksW*blocksH];
 }
 
-TextureChunk::TextureChunk(const TextureChunk& r):chunks(NULL),texId(0),width(r.width),height(r.height)
+TextureChunk::TextureChunk(const TextureChunk& r):chunks(nullptr),texId(0),width(r.width),height(r.height)
 {
 	*this = r;
 	return;
@@ -105,6 +106,8 @@ bool TextureChunk::resizeIfLargeEnough(uint32_t w, uint32_t h)
 	}
 	const uint32_t blocksW=(width+CHUNKSIZE-1)/CHUNKSIZE;
 	const uint32_t blocksH=(height+CHUNKSIZE-1)/CHUNKSIZE;
+	w += (w/CHUNKSIZE_REAL+1)*2;
+	h += (h/CHUNKSIZE_REAL+1)*2;
 	if(w<=blocksW*CHUNKSIZE && h<=blocksH*CHUNKSIZE)
 	{
 		width=w;
@@ -114,9 +117,9 @@ bool TextureChunk::resizeIfLargeEnough(uint32_t w, uint32_t h)
 	return false;
 }
 
-CairoRenderer::CairoRenderer(const MATRIX& _m, int32_t _x, int32_t _y, int32_t _w, int32_t _h,
-		float _s, float _a, const std::vector<MaskData>& _ms, bool _smoothing)
-	: IDrawable(_w, _h, _x, _y, _a, _ms), scaleFactor(_s),smoothing(_smoothing), matrix(_m)
+CairoRenderer::CairoRenderer(const MATRIX& _m, int32_t _x, int32_t _y, int32_t _w, int32_t _h, int32_t _rx, int32_t _ry, int32_t _rw, int32_t _rh, float _r, float _xs, float _ys, bool _im, bool _hm,
+		float _s, float _a, const std::vector<MaskData>& _ms, bool _smoothing, number_t _xstart, number_t _ystart)
+	: IDrawable(_w, _h, _x, _y, _rw, _rh, _rx, _ry, _r, _xs, _ys, _im, _hm,_a, _ms), scaleFactor(_s),smoothing(_smoothing), matrix(_m),xstart(_xstart),ystart(_ystart)
 {
 }
 
@@ -136,7 +139,7 @@ void CairoTokenRenderer::quadraticBezier(cairo_t* cr, double control_x, double c
 
 cairo_pattern_t* CairoTokenRenderer::FILLSTYLEToCairo(const FILLSTYLE& style, double scaleCorrection, ColorTransform* colortransform,float scalex,float scaley)
 {
-	cairo_pattern_t* pattern = NULL;
+	cairo_pattern_t* pattern = nullptr;
 
 	switch(style.FillStyleType)
 	{
@@ -167,6 +170,8 @@ cairo_pattern_t* CairoTokenRenderer::FILLSTYLEToCairo(const FILLSTYLE& style, do
 			}
 
 			MATRIX tmp=style.Matrix;
+			tmp.x0 -= style.ShapeBounds.Xmin/20;
+			tmp.y0 -= style.ShapeBounds.Ymin/20;
 			cairo_matrix_scale(&tmp,scalex,scaley);
 			tmp.x0/=scaleCorrection;
 			tmp.y0/=scaleCorrection;
@@ -221,9 +226,9 @@ cairo_pattern_t* CairoTokenRenderer::FILLSTYLEToCairo(const FILLSTYLE& style, do
 		{
 			_NR<BitmapContainer> bm(style.bitmap);
 			if(bm.isNull())
-				return NULL;
+				return nullptr;
 			if (!style.Matrix.isInvertible())
-				return NULL;
+				return nullptr;
 
 			cairo_surface_t* surface = nullptr;
 			if (colortransform)
@@ -251,14 +256,14 @@ cairo_pattern_t* CairoTokenRenderer::FILLSTYLEToCairo(const FILLSTYLE& style, do
 
 			//Make a copy to invert it
 			cairo_matrix_t mat=style.Matrix;
+			mat.x0 -= style.ShapeBounds.Xmin/20;
+			mat.y0 -= style.ShapeBounds.Ymin/20;
 			cairo_matrix_scale(&mat,scalex,scaley);
 			cairo_status_t st = cairo_matrix_invert(&mat);
 			assert(st == CAIRO_STATUS_SUCCESS);
 			(void)st; // silence warning about unused variable
 			mat.x0 /= scaleCorrection;
 			mat.y0 /= scaleCorrection;
-			mat.x0*=scalex;
-			mat.y0*=scaley;
 
 			cairo_pattern_set_matrix (pattern, &mat);
 			assert(cairo_pattern_status(pattern) == CAIRO_STATUS_SUCCESS);
@@ -278,13 +283,13 @@ cairo_pattern_t* CairoTokenRenderer::FILLSTYLEToCairo(const FILLSTYLE& style, do
 		}
 		default:
 			LOG(LOG_NOT_IMPLEMENTED, "Unsupported fill style " << (int)style.FillStyleType);
-			return NULL;
+			return nullptr;
 	}
 
 	return pattern;
 }
 
-bool CairoTokenRenderer::cairoPathFromTokens(cairo_t* cr, const tokensVector& tokens, double scaleCorrection, bool skipPaint,ColorTransform* colortransform,float scalex,float scaley)
+bool CairoTokenRenderer::cairoPathFromTokens(cairo_t* cr, const tokensVector& tokens, double scaleCorrection, bool skipPaint,ColorTransform* colortransform,float scalex,float scaley,number_t xstart, number_t ystart)
 {
 	cairo_scale(cr, scaleCorrection, scaleCorrection);
 
@@ -294,7 +299,6 @@ bool CairoTokenRenderer::cairoPathFromTokens(cairo_t* cr, const tokensVector& to
 	cairo_matrix_t mat;
 	cairo_get_matrix(cr,&mat);
 	cairo_set_matrix(stroke_cr, &mat);
-	
 	cairo_push_group(stroke_cr);
 
 	// Make sure not to draw anything until a fill is set.
@@ -333,23 +337,23 @@ bool CairoTokenRenderer::cairoPathFromTokens(cairo_t* cr, const tokensVector& to
 			switch((*it)->type)
 			{
 				case MOVE:
-					PATH(cairo_move_to, (*it)->p1.x*scalex, (*it)->p1.y*scaley);
+					PATH(cairo_move_to, (*it)->p1.x*scalex-xstart*scalex, (*it)->p1.y*scaley-ystart*scaley);
 					break;
 				case STRAIGHT:
-					PATH(cairo_line_to, (*it)->p1.x*scalex, (*it)->p1.y*scaley);
+					PATH(cairo_line_to, (*it)->p1.x*scalex-xstart*scalex, (*it)->p1.y*scaley-ystart*scaley);
 					empty = false;
 					break;
 				case CURVE_QUADRATIC:
 					PATH(quadraticBezier,
-					   (*it)->p1.x*scalex, (*it)->p1.y*scaley,
-					   (*it)->p2.x*scalex, (*it)->p2.y*scaley);
+					   (*it)->p1.x*scalex-xstart*scalex, (*it)->p1.y*scaley-ystart*scaley,
+					   (*it)->p2.x*scalex-xstart*scalex, (*it)->p2.y*scaley-ystart*scaley);
 					empty = false;
 					break;
 				case CURVE_CUBIC:
 					PATH(cairo_curve_to,
-					   (*it)->p1.x*scalex, (*it)->p1.y*scaley,
-					   (*it)->p2.x*scalex, (*it)->p2.y*scaley,
-					   (*it)->p3.x*scalex, (*it)->p3.y*scaley);
+					   (*it)->p1.x*scalex-xstart*scalex, (*it)->p1.y*scaley-ystart*scaley,
+					   (*it)->p2.x*scalex-xstart*scalex, (*it)->p2.y*scaley-ystart*scaley,
+					   (*it)->p3.x*scalex-xstart*scalex, (*it)->p3.y*scaley-ystart*scaley);
 					empty = false;
 					break;
 				case SET_FILL:
@@ -534,7 +538,7 @@ void CairoTokenRenderer::executeDraw(cairo_t* cr, float scalex, float scaley)
 	cairo_set_operator (cr, CAIRO_OPERATOR_OVER);
 	cairo_set_fill_rule(cr, CAIRO_FILL_RULE_EVEN_ODD);
 
-	cairoPathFromTokens(cr, tokens, scaleFactor, false,colortransform.getPtr(),scalex, scaley);
+	cairoPathFromTokens(cr, tokens, scaleFactor, false,colortransform.getPtr(),scalex, scaley,xstart,ystart);
 }
 
 uint8_t* CairoRenderer::getPixelBuffer()
@@ -543,55 +547,23 @@ uint8_t* CairoRenderer::getPixelBuffer()
 		return nullptr;
 
 	SystemState* sys = getSys();
-	int32_t windowWidth=sys->stage->internalGetWidth();
-	int32_t windowHeight=sys->stage->internalGetHeight();
-	
 	float scalex;
 	float scaley;
-	
 	int offx,offy;
 	sys->stageCoordinateMapping(sys->getRenderThread()->windowWidth,sys->getRenderThread()->windowHeight,offx,offy, scalex,scaley);
 
-	//Discard stuff that it's outside the visible part
-	if(xOffset >= windowWidth || yOffset >= windowHeight
-		|| xOffset + width <= 0 || yOffset + height <= 0)
-	{
-		width=0;
-		height=0;
-		return nullptr;
-	}
-
-	if(xOffset<0)
-	{
-		width+=xOffset;
-		xOffset=0;
-	}
-	if(yOffset<0)
-	{
-		height+=yOffset;
-		yOffset=0;
-	}
-	//Clip the size to the screen borders
-	if((xOffset>=0) && (width+xOffset) > windowWidth)
-		width=windowWidth-xOffset;
-	if((yOffset>=0) && (height+yOffset) > windowHeight)
-		height=windowHeight-yOffset;
 	uint8_t* ret=nullptr;
 
 	xOffset*=scalex;
 	yOffset*=scaley;
+	xOffsetTransformed*=scalex;
+	yOffsetTransformed*=scaley;
+	xOffset+=offx;
+	yOffset+=offy;
+	xOffsetTransformed+=offx;
+	yOffsetTransformed+=offy;
 	width*=scalex;
 	height*=scaley;
-
-	matrix.x0*=scalex;
-	matrix.y0*=scaley;
-	//Make sure the rendering starts at 0,0 in surface coordinates
-	//This also guarantees that all the shape fills in width/height pixels
-	//We don't translate for negative offsets as we don't want to see what's in negative coords
-	if(xOffset >= 0)
-		matrix.x0-=xOffset;
-	if(yOffset >= 0)
-		matrix.y0-=yOffset;
 
 	cairo_surface_t* cairoSurface=allocateSurface(ret);
 
@@ -608,14 +580,13 @@ uint8_t* CairoRenderer::getPixelBuffer()
 		masks[i].m->applyCairoMask(cr,xOffset,yOffset,scalex,scaley);
 	}
 
-	cairo_set_matrix(cr, &matrix);
 	executeDraw(cr,scalex, scaley);
 
 	cairo_surface_t* maskSurface = nullptr;
 	uint8_t* maskRawData = nullptr;
 	cairo_t* maskCr = nullptr;
-	int32_t maskXOffset = 0;
-	int32_t maskYOffset = 0;
+	int32_t maskXOffset = 1;
+	int32_t maskYOffset = 1;
 	//Also apply the soft masks
 	for(uint32_t i=0;i<masks.size();i++)
 	{
@@ -670,7 +641,7 @@ bool CairoTokenRenderer::hitTest(const tokensVector& tokens, float scaleFactor, 
 	cairo_set_operator (cr, CAIRO_OPERATOR_OVER);
 	cairo_set_fill_rule(cr, CAIRO_FILL_RULE_WINDING);
 
-	bool empty=cairoPathFromTokens(cr, tokens, scaleFactor, true,nullptr,1.0,1.0);
+	bool empty=cairoPathFromTokens(cr, tokens, scaleFactor, true,nullptr,1.0,1.0,0,0);
 	bool ret=false;
 	if(!empty)
 	{
@@ -687,17 +658,20 @@ bool CairoTokenRenderer::hitTest(const tokensVector& tokens, float scaleFactor, 
 
 void CairoTokenRenderer::applyCairoMask(cairo_t* cr,int32_t xOffset,int32_t yOffset, float scalex, float scaley) const
 {
-	cairo_matrix_t tmp=matrix;
-	tmp.x0-=xOffset;
-	tmp.y0-=yOffset;
-	cairo_set_matrix(cr, &tmp);
-	cairoPathFromTokens(cr, tokens, scaleFactor, true,colortransform.getPtr(),scalex,scaley);
+	cairo_matrix_t mat;
+	cairo_get_matrix(cr,&mat);
+	cairo_translate(cr,xOffset,yOffset);
+	cairo_set_matrix(cr,&mat);
+	
+	cairoPathFromTokens(cr, tokens, scaleFactor, true,colortransform.getPtr(),scalex,scaley,xstart,ystart);
 	cairo_clip(cr);
 }
 
-CairoTokenRenderer::CairoTokenRenderer(const tokensVector &_g, const MATRIX &_m, int32_t _x, int32_t _y, int32_t _w, int32_t _h, float _s, float _a
-									   , const std::vector<IDrawable::MaskData> &_ms, bool _smoothing, ColorTransform *_ct)
-	: CairoRenderer(_m,_x,_y,_w,_h,_s,_a,_ms,_smoothing),tokens(_g),colortransform(_ct)
+CairoTokenRenderer::CairoTokenRenderer(const tokensVector &_g, const MATRIX &_m, int32_t _x, int32_t _y, int32_t _w, int32_t _h
+									   , int32_t _rx, int32_t _ry, int32_t _rw, int32_t _rh, float _r
+									   , float _xs, float _ys, bool _im, bool _hm, float _s, float _a
+									   , const std::vector<IDrawable::MaskData> &_ms, bool _smoothing, number_t _xmin, number_t _ymin, ColorTransform *_ct)
+	: CairoRenderer(_m,_x,_y,_w,_h,_rx,_ry,_rw,_rh,_r,_xs,_ys,_im,_hm,_s,_a,_ms,_smoothing,_xmin,_ymin),tokens(_g),colortransform(_ct)
 {
 	if (_ct)
 		_ct->incRef();
@@ -992,7 +966,7 @@ void CairoPangoRenderer::applyCairoMask(cairo_t* cr, int32_t xOffset, int32_t yO
 	assert(false);
 }
 
-AsyncDrawJob::AsyncDrawJob(IDrawable* d, _R<DisplayObject> o,int32_t flushstep):drawable(d),owner(o),surfaceBytes(NULL),uploadNeeded(false)
+AsyncDrawJob::AsyncDrawJob(IDrawable* d, _R<DisplayObject> o,int32_t flushstep):drawable(d),owner(o),surfaceBytes(nullptr),uploadNeeded(false)
 {
 	o->flushstep = flushstep;
 }
@@ -1051,13 +1025,27 @@ const TextureChunk& AsyncDrawJob::getTexture()
 		surface.tex=owner->getSystemState()->getRenderThread()->allocateTexture(width, height,false);
 	surface.xOffset=drawable->getXOffset();
 	surface.yOffset=drawable->getYOffset();
+	surface.xOffsetTransformed=drawable->getXOffsetTransformed();
+	surface.yOffsetTransformed=drawable->getYOffsetTransformed();
+	surface.widthTransformed=drawable->getWidthTransformed();
+	surface.heightTransformed=drawable->getHeightTransformed();
 	surface.alpha=drawable->getAlpha();
+	surface.rotation=drawable->getRotation();
+	surface.xscale = drawable->getXScale();
+	surface.yscale = drawable->getYScale();
+	surface.isMask = drawable->getIsMask();
+	surface.hasMask = drawable->getHasMask();
 	return surface.tex;
 }
 
 void AsyncDrawJob::uploadFence()
 {
-	delete this;
+	// ensure that the owner is moved to freelist in vm thread
+	if (getVm(owner->getSystemState()))
+	{
+		owner->incRef();
+		getVm(owner->getSystemState())->addDeletableObject(owner.getPtr());
+	}
 }
 
 void SoftwareInvalidateQueue::addToInvalidateQueue(_R<DisplayObject> d)

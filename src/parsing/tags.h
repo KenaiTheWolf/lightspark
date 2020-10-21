@@ -83,11 +83,12 @@ public:
 	tiny_string bindingclassname;
 	RootMovieClip* loadedFrom;
 	uint32_t nameID;
-	DictionaryTag(RECORDHEADER h, RootMovieClip* root):Tag(h),bindedTo(NULL),loadedFrom(root),nameID(UINT32_MAX) { }
+	DictionaryTag(RECORDHEADER h, RootMovieClip* root):Tag(h),bindedTo(nullptr),loadedFrom(root),nameID(UINT32_MAX) { }
 	TAGTYPE getType() const override { return DICT_TAG; }
 	virtual int getId() const=0;
-	virtual ASObject* instance(Class_base* c=NULL) { return NULL; }
+	virtual ASObject* instance(Class_base* c=nullptr) { return nullptr; }
 	virtual MATRIX MapToBounds(const MATRIX& mat) { return mat; }
+	virtual MATRIX MapToBoundsForButton(const MATRIX& mat) { return MapToBounds(mat); }
 };
 
 /*
@@ -143,11 +144,14 @@ protected:
 	UI16_SWF ShapeId;
 	RECT ShapeBounds;
 	SHAPEWITHSTYLE Shapes;
+	tokensVector* tokens;
 	DefineShapeTag(RECORDHEADER h,int v,RootMovieClip* root);
 public:
 	DefineShapeTag(RECORDHEADER h,std::istream& in, RootMovieClip* root);
+	~DefineShapeTag();
 	virtual int getId() const{ return ShapeId; }
-	ASObject* instance(Class_base* c=NULL);
+	ASObject* instance(Class_base* c=nullptr);
+	MATRIX MapToBoundsForButton(const MATRIX& mat) override;
 };
 
 class DefineShape2Tag: public DefineShapeTag
@@ -244,9 +248,9 @@ private:
 	TextData textData;
 public:
 	DefineEditTextTag(RECORDHEADER h, std::istream& s, RootMovieClip* root);
-	int getId() const { return CharacterID; }
-	ASObject* instance(Class_base* c=NULL);
-	MATRIX MapToBounds(const MATRIX& mat);
+	int getId() const override { return CharacterID; }
+	ASObject* instance(Class_base* c=nullptr) override;
+	MATRIX MapToBounds(const MATRIX& mat) override;
 };
 
 class MemoryStreamCache;
@@ -265,7 +269,7 @@ private:
 public:
 	DefineSoundTag(RECORDHEADER h, std::istream& s, RootMovieClip* root);
 	virtual int getId() const { return SoundId; }
-	ASObject* instance(Class_base* c=NULL);
+	ASObject* instance(Class_base* c=nullptr) override;
 	LS_AUDIO_CODEC getAudioCodec() const;
 	number_t getDurationInMS() const;
 	int getSampleRate() const;
@@ -360,7 +364,7 @@ protected:
 	UI16_SWF Ratio;
 	UI16_SWF ClipDepth;
 	CLIPACTIONS ClipActions;
-	PlaceObject2Tag(RECORDHEADER h,uint32_t v):DisplayListTag(h),ClipActions(v,nullptr),NameID(BUILTIN_STRINGS::EMPTY){}
+	PlaceObject2Tag(RECORDHEADER h,uint32_t v):DisplayListTag(h),ClipActions(v,nullptr),placedTag(nullptr),NameID(BUILTIN_STRINGS::EMPTY){}
 	virtual void setProperties(DisplayObject* obj, DisplayObjectContainer* parent) const;
 	DictionaryTag* placedTag;
 public:
@@ -546,7 +550,7 @@ private:
 public:
 	DefineFont4Tag(RECORDHEADER h, std::istream& in,RootMovieClip* root);
 	virtual int getId() const { return FontID; }
-	ASObject* instance(Class_base* c=NULL);
+	ASObject* instance(Class_base* c=nullptr);
 };
 
 class DefineTextTag: public DictionaryTag
@@ -565,7 +569,8 @@ public:
 	int version;
 	DefineTextTag(RECORDHEADER h, std::istream& in,RootMovieClip* root,int v=1);
 	int getId() const { return CharacterId; }
-	ASObject* instance(Class_base* c=NULL);
+	ASObject* instance(Class_base* c=nullptr);
+	MATRIX MapToBounds(const MATRIX& mat) override;
 };
 
 class DefineText2Tag: public DefineTextTag
@@ -584,7 +589,7 @@ public:
 	DefineSpriteTag(RECORDHEADER h, std::istream& in, RootMovieClip* root);
 	~DefineSpriteTag();
 	virtual int getId() const { return SpriteID; }
-	virtual ASObject* instance(Class_base* c=NULL);
+	virtual ASObject* instance(Class_base* c=nullptr);
 };
 
 class ProtectTag: public ControlTag
@@ -600,10 +605,10 @@ class BitmapTag: public DictionaryTag
 {
 protected:
         _R<BitmapContainer> bitmap;
-    void loadBitmap(uint8_t* inData, int datasize, const uint8_t *tablesData=NULL, int tablesLen=0);
+    void loadBitmap(uint8_t* inData, int datasize, const uint8_t *tablesData=nullptr, int tablesLen=0);
 public:
 	BitmapTag(RECORDHEADER h,RootMovieClip* root);
-	ASObject* instance(Class_base* c=NULL);
+	ASObject* instance(Class_base* c=nullptr);
         _R<BitmapContainer> getBitmap() const;
 };
 

@@ -699,36 +699,46 @@ bool TextLine::boundsRect(number_t& xmin, number_t& xmax, number_t& ymin, number
 	return true;
 }
 
-void TextLine::requestInvalidation(InvalidateQueue* q)
+void TextLine::requestInvalidation(InvalidateQueue* q, bool forceTextureRefresh)
 {
-	DisplayObjectContainer::requestInvalidation(q);
+	DisplayObjectContainer::requestInvalidation(q,forceTextureRefresh);
 	incRef();
 	q->addToInvalidateQueue(_MR(this));
 }
 
 IDrawable* TextLine::invalidate(DisplayObject* target, const MATRIX& initialMatrix,bool smoothing)
 {
-	int32_t x,y;
-	uint32_t width,height;
+	int32_t x,y,rx,ry;
+	uint32_t width,height,rwidth,rheight;
 	number_t bxmin,bxmax,bymin,bymax;
 	if(boundsRect(bxmin,bxmax,bymin,bymax)==false)
 	{
 		//No contents, nothing to do
-		return NULL;
+		return nullptr;
 	}
 
 	//Compute the matrix and the masks that are relevant
+	bool isMask;
+	bool hasMask;
 	MATRIX totalMatrix;
 	std::vector<IDrawable::MaskData> masks;
-	computeMasksAndMatrix(target,masks,totalMatrix);
+	computeMasksAndMatrix(target,masks,totalMatrix,false,isMask,hasMask);
 	totalMatrix=initialMatrix.multiplyMatrix(totalMatrix);
 	computeBoundsForTransformedRect(bxmin,bxmax,bymin,bymax,x,y,width,height,totalMatrix);
+	MATRIX totalMatrix2;
+	computeMasksAndMatrix(target,masks,totalMatrix2,true,isMask,hasMask);
+	totalMatrix2=initialMatrix.multiplyMatrix(totalMatrix2);
+	computeBoundsForTransformedRect(bxmin,bxmax,bymin,bymax,rx,ry,rwidth,rheight,totalMatrix2);
 	if(width==0 || height==0)
-		return NULL;
+		return nullptr;
 
-	return new CairoPangoRenderer(*this,
-				      totalMatrix, x, y, width, height, 1.0f,
-				      getConcatenatedAlpha(),masks,smoothing,0);
+	float rotation = getConcatenatedMatrix().getRotation();
+	return new CairoPangoRenderer(*this, totalMatrix,
+				x, y, width, height,
+				rx, ry, rwidth, rheight,rotation,
+				totalMatrix.getScaleX(),totalMatrix.getScaleY(),
+				isMask,hasMask,
+				1.0f,getConcatenatedAlpha(),masks,smoothing,bxmin,bymin,0);
 }
 
 bool TextLine::renderImpl(RenderContext& ctxt) const

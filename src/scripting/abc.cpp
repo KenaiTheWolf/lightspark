@@ -136,13 +136,16 @@
 #include "scripting/flash/utils/Timer.h"
 #include "scripting/flash/geom/flashgeom.h"
 #include "scripting/flash/geom/orientation3d.h"
+#include "scripting/flash/globalization/collator.h"
 #include "scripting/flash/globalization/datetimeformatter.h"
 #include "scripting/flash/globalization/datetimestyle.h"
+#include "scripting/flash/globalization/collator.h"
 #include "scripting/flash/globalization/collatormode.h"
 #include "scripting/flash/globalization/datetimenamecontext.h"
 #include "scripting/flash/globalization/datetimenamestyle.h"
 #include "scripting/flash/globalization/nationaldigitstype.h"
 #include "scripting/flash/globalization/lastoperationstatus.h"
+#include "scripting/flash/globalization/localeid.h"
 #include "scripting/flash/globalization/currencyformatter.h"
 #include "scripting/flash/globalization/numberformatter.h"
 #include "scripting/flash/globalization/stringtools.h"
@@ -807,16 +810,19 @@ void ABCVm::registerClasses()
 	builtin->registerBuiltin("PrintJobOptions","flash.printing",Class<PrintJobOptions>::getRef(m_sys));
 	builtin->registerBuiltin("PrintJobOrientation","flash.printing",Class<PrintJobOrientation>::getRef(m_sys));
 
+	builtin->registerBuiltin("Collator","flash.globalization",Class<Collator>::getRef(m_sys));
 	builtin->registerBuiltin("StringTools","flash.globalization",Class<StringTools>::getRef(m_sys));
 	builtin->registerBuiltin("DateTimeFormatter","flash.globalization",Class<DateTimeFormatter>::getRef(m_sys));
 	builtin->registerBuiltin("DateTimeStyle","flash.globalization",Class<DateTimeStyle>::getRef(m_sys));
 	builtin->registerBuiltin("LastOperationStatus","flash.globalization",Class<LastOperationStatus>::getRef(m_sys));
 	builtin->registerBuiltin("CurrencyFormatter","flash.globalization",Class<CurrencyFormatter>::getRef(m_sys));
 	builtin->registerBuiltin("NumberFormatter","flash.globalization",Class<NumberFormatter>::getRef(m_sys));
+	builtin->registerBuiltin("Collator","flash.globalization",Class<Collator>::getRef(m_sys));
 	builtin->registerBuiltin("CollatorMode","flash.globalization",Class<CollatorMode>::getRef(m_sys));
 	builtin->registerBuiltin("DateTimeNameContext","flash.globalization",Class<DateTimeNameContext>::getRef(m_sys));
 	builtin->registerBuiltin("DateTimeNameStyle","flash.globalization",Class<DateTimeNameStyle>::getRef(m_sys));
 	builtin->registerBuiltin("NationalDigitsType","flash.globalization",Class<NationalDigitsType>::getRef(m_sys));
+	builtin->registerBuiltin("LocaleID","flash.globalization",Class<LocaleID>::getRef(m_sys));
 	
 	builtin->registerBuiltin("ClipboardFormats","flash.desktop",Class<ClipboardFormats>::getRef(m_sys));
 	builtin->registerBuiltin("ClipboardTransferMode","flash.desktop",Class<ClipboardTransferMode>::getRef(m_sys));
@@ -1239,6 +1245,7 @@ multiname* ABCContext::getMultinameImpl(asAtom& n, ASObject* n2, unsigned int mi
 				tiny_string name = root->getSystemState()->getStringFromUniqueId(getString(td->name));
 				for(size_t i=0;i<m->param_types.size();++i)
 				{
+					ret->templateinstancenames.push_back(getMultiname(m->param_types[i],nullptr));
 					multiname_info* p=&constant_pool.multinames[m->param_types[i]];
 					name += "$";
 					tiny_string nsname;
@@ -1597,6 +1604,12 @@ void ABCVm::shutdown()
 	}
 }
 
+void ABCVm::addDeletableObject(ASObject *obj)
+{
+	Locker l(event_queue_mutex);
+	deletableObjects.push_back(obj);
+}
+
 void ABCVm::finalize()
 {
 	//The event queue may be not empty if the VM has been been started
@@ -1915,6 +1928,13 @@ void ABCVm::handleEvent(std::pair<_NR<EventDispatcher>, _R<Event> > e)
 					m_sys->stage->advanceFrame();
 				break;
 			}
+			case ROOTCONSTRUCTEDEVENT:
+			{
+				RootConstructedEvent* ev=static_cast<RootConstructedEvent*>(e.second.getPtr());
+				LOG(LOG_CALLS,"RootConstructedEvent");
+				ev->clip->constructionComplete();
+				break;
+			}
 			case IDLE_EVENT:
 			{
 				Locker l(event_queue_mutex);
@@ -1991,7 +2011,7 @@ bool ABCVm::prependEvent(_NR<EventDispatcher> obj ,_R<Event> ev, bool force)
 		return false;
 
 	if (!obj.isNull())
-		obj->onNewEvent();
+		obj->onNewEvent(ev.getPtr());
 
 	if (isIdle || force)
 		events_queue.push_front(pair<_NR<EventDispatcher>,_R<Event>>(obj, ev));
@@ -2028,7 +2048,7 @@ bool ABCVm::addEvent(_NR<EventDispatcher> obj ,_R<Event> ev)
 		return false;
 	}
 	if (!obj.isNull())
-		obj->onNewEvent();
+		obj->onNewEvent(ev.getPtr());
 	events_queue.push_back(pair<_NR<EventDispatcher>,_R<Event>>(obj, ev));
 	RELEASE_WRITE(ev->queued,true);
 	sem_event_cond.signal();
@@ -2135,14 +2155,13 @@ void ABCVm::handleFrontEvent()
 				)
 			m_sys->flushInvalidationQueue();
 		if (!e.first.isNull())
-			e.first->afterHandleEvent();
+			e.first->afterHandleEvent(e.second.getPtr());
 	}
 	catch(LightsparkException& e)
 	{
 		LOG(LOG_ERROR,_("Error in VM ") << e.cause);
 		m_sys->setError(e.cause);
 		/* do not allow any more event to be enqueued */
-		shuttingdown = true;
 		signalEventWaiters();
 	}
 	catch(ASObject*& e)
@@ -2419,7 +2438,9 @@ int ABCVm::Run(void* d)
 		th->event_queue_mutex.lock();
 		while(th->events_queue.empty() && !th->shuttingdown)
 			th->sem_event_cond.wait(th->event_queue_mutex);
-
+		for (auto it = th->deletableObjects.begin(); it != th->deletableObjects.end(); it++)
+			(*it)->decRef();
+		th->deletableObjects.clear();
 		if(th->shuttingdown)
 		{
 			//If the queue is empty stop immediately

@@ -95,7 +95,7 @@ private:
 	bool renderImpl(RenderContext& ctxt) const override;
 	bool boundsRect(number_t& xmin, number_t& xmax, number_t& ymin, number_t& ymax) const override;
 	IDrawable* invalidate(DisplayObject* target, const MATRIX& initialMatrix, bool smoothing) override;
-	void requestInvalidation(InvalidateQueue* q) override;
+	void requestInvalidation(InvalidateQueue* q, bool forceTextureRefresh=false) override;
 	void defaultEventBehavior(_R<Event> e) override;
 	void updateText(const tiny_string& new_text);
 	//Computes and changes (text)width and (text)height using Pango
@@ -118,6 +118,7 @@ private:
 	_NR<ASString> restrictChars;
 	number_t autosizeposition;
 	tiny_string tagvarname;
+	Mutex invalidatemutex;
 protected:
 	void afterSetLegacyMatrix() override;
 public:
@@ -259,18 +260,18 @@ class StaticText: public DisplayObject, public TokenContainer
 {
 private:
 	ASFUNCTION_ATOM(_getText);
+	RECT bounds;
 protected:
-	bool boundsRect(number_t& xmin, number_t& xmax, number_t& ymin, number_t& ymax) const override
-		{ return TokenContainer::boundsRect(xmin,xmax,ymin,ymax); }
+	bool boundsRect(number_t& xmin, number_t& xmax, number_t& ymin, number_t& ymax) const override;
 	bool renderImpl(RenderContext& ctxt) const override
 		{ return TokenContainer::renderImpl(ctxt); }
 	_NR<DisplayObject> hitTestImpl(_NR<DisplayObject> last, number_t x, number_t y, HIT_TYPE type,bool interactiveObjectsOnly) override;
 public:
 	StaticText(Class_base* c) : DisplayObject(c),TokenContainer(this, this->getSystemState()->textTokenMemory) {}
-	StaticText(Class_base* c, const tokensVector& tokens):
-		DisplayObject(c),TokenContainer(this, this->getSystemState()->textTokenMemory, tokens, 1.0f/1024.0f/20.0f/20.0f) {}
+	StaticText(Class_base* c, const tokensVector& tokens,const RECT& b):
+		DisplayObject(c),TokenContainer(this, this->getSystemState()->textTokenMemory, tokens, 1.0f/1024.0f/20.0f/20.0f),bounds(b) {}
 	static void sinit(Class_base* c);
-	void requestInvalidation(InvalidateQueue* q) override { TokenContainer::requestInvalidation(q); }
+	void requestInvalidation(InvalidateQueue* q, bool forceTextureRefresh=false) override { TokenContainer::requestInvalidation(q,forceTextureRefresh); }
 	IDrawable* invalidate(DisplayObject* target, const MATRIX& initialMatrix,bool smoothing) override
 	{ return TokenContainer::invalidate(target, initialMatrix,smoothing); }
 };

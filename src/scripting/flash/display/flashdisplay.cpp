@@ -959,10 +959,10 @@ bool Sprite::boundsRect(number_t& xmin, number_t& xmax, number_t& ymin, number_t
 	return ret;
 }
 
-void Sprite::requestInvalidation(InvalidateQueue* q)
+void Sprite::requestInvalidation(InvalidateQueue* q, bool forceTextureRefresh)
 {
-	DisplayObjectContainer::requestInvalidation(q);
-	TokenContainer::requestInvalidation(q);
+	DisplayObjectContainer::requestInvalidation(q,forceTextureRefresh);
+	TokenContainer::requestInvalidation(q,forceTextureRefresh);
 }
 
 bool DisplayObjectContainer::renderImpl(RenderContext& ctxt) const
@@ -973,9 +973,9 @@ bool DisplayObjectContainer::renderImpl(RenderContext& ctxt) const
 	std::vector<_R<DisplayObject>>::const_iterator it=dynamicDisplayList.begin();
 	for(;it!=dynamicDisplayList.end();++it)
 	{
-		//Skip the drawing of masks
-		if((*it)->isMask() || (*it)->ClipDepth)
-			continue;
+//		//Skip the drawing of masks
+//		if((*it)->isMask() || (*it)->ClipDepth)
+//			continue;
 		if ((*it)->Render(ctxt))
 		{
 			renderingfailed=true;
@@ -1048,7 +1048,7 @@ _NR<DisplayObject> DisplayObjectContainer::hitTestImpl(_NR<DisplayObject> last, 
 		ret=(*j)->hitTest(_MR(this), localX,localY, mouseChildren ? type : GENERIC_HIT,interactiveObjectsOnly);
 		if(!ret.isNull())
 		{
-			if (interactiveObjectsOnly && !ret->is<InteractiveObject>())
+			if (interactiveObjectsOnly && !ret->is<InteractiveObject>() && mouseChildren)
 			{
 				if (this->is<RootMovieClip>())
 					continue;
@@ -1364,13 +1364,13 @@ void MovieClip::buildTraits(ASObject* o)
 {
 }
 
-MovieClip::MovieClip(Class_base* c):Sprite(c),fromDefineSpriteTag(UINT32_MAX),frameScriptToExecute(UINT32_MAX),inExecuteFramescript(false),inAVM1Attachment(false),actions(0),totalFrames_unreliable(1),enabled(true)
+MovieClip::MovieClip(Class_base* c):Sprite(c),fromDefineSpriteTag(UINT32_MAX),frameScriptToExecute(UINT32_MAX),inExecuteFramescript(false),inAVM1Attachment(false),actions(nullptr),totalFrames_unreliable(1),enabled(true)
 {
 	subtype=SUBTYPE_MOVIECLIP;
 	currentframeIterator=frames.end();
 }
 
-MovieClip::MovieClip(Class_base* c, const FrameContainer& f, uint32_t defineSpriteTagID):Sprite(c),FrameContainer(f),fromDefineSpriteTag(defineSpriteTagID),frameScriptToExecute(UINT32_MAX),inExecuteFramescript(false),inAVM1Attachment(false),actions(0),totalFrames_unreliable(frames.size()),enabled(true)
+MovieClip::MovieClip(Class_base* c, const FrameContainer& f, uint32_t defineSpriteTagID):Sprite(c),FrameContainer(f),fromDefineSpriteTag(defineSpriteTagID),frameScriptToExecute(UINT32_MAX),inExecuteFramescript(false),inAVM1Attachment(false),actions(nullptr),totalFrames_unreliable(frames.size()),enabled(true)
 {
 	subtype=SUBTYPE_MOVIECLIP;
 	currentframeIterator=frames.end();
@@ -1402,7 +1402,8 @@ bool MovieClip::destruct()
 	frames.emplace_back(Frame());
 	scenes.resize(1);
 	state.reset();
-	
+	actions=nullptr;
+
 	enabled = true;
 	return Sprite::destruct();
 }
@@ -1808,7 +1809,7 @@ void MovieClip::afterLegacyDelete(DisplayObjectContainer *par)
 {
 	getSystemState()->stage->AVM1RemoveMouseListener(this);
 	getSystemState()->stage->AVM1RemoveKeyboardListener(this);
-	if (this->actions.AllEventFlags.ClipEventEnterFrame)
+	if (this->actions && this->actions->AllEventFlags.ClipEventEnterFrame)
 	{
 		this->incRef();
 		getSystemState()->unregisterFrameListener(_MR(this));
@@ -1817,13 +1818,16 @@ void MovieClip::afterLegacyDelete(DisplayObjectContainer *par)
 }
 bool MovieClip::AVM1HandleKeyboardEvent(KeyboardEvent *e)
 {
-	for (auto it = actions.ClipActionRecords.begin(); it != actions.ClipActionRecords.end(); it++)
+	if (this->actions)
 	{
-		if( (e->type == "keyDown" && it->EventFlags.ClipEventKeyDown) ||
-				(e->type == "keyUp" && it->EventFlags.ClipEventKeyDown))
+		for (auto it = actions->ClipActionRecords.begin(); it != actions->ClipActionRecords.end(); it++)
 		{
-			std::map<uint32_t,asAtom> m;
-			ACTIONRECORD::executeActions(this,this->getCurrentFrame()->getAVM1Context(),it->actions,it->startactionpos,m);
+			if( (e->type == "keyDown" && it->EventFlags.ClipEventKeyDown) ||
+				(e->type == "keyUp" && it->EventFlags.ClipEventKeyDown))
+			{
+				std::map<uint32_t,asAtom> m;
+				ACTIONRECORD::executeActions(this,this->getCurrentFrame()->getAVM1Context(),it->actions,it->startactionpos,m);
+			}
 		}
 	}
 	Sprite::AVM1HandleKeyboardEvent(e);
@@ -1841,9 +1845,11 @@ bool MovieClip::AVM1HandleMouseEvent(EventDispatcher *dispatcher, MouseEvent *e)
 		_NR<DisplayObject> dispobj=hitTest(NullRef,x,y, DisplayObject::MOUSE_CLICK,true);
 		if (!dispobj && ((e->type == "click")|| (e->type == "releaseOutside")))
 				return false;
-		for (auto it = actions.ClipActionRecords.begin(); it != actions.ClipActionRecords.end(); it++)
+		if (this->actions)
 		{
-			if( (e->type == "mouseDown" && it->EventFlags.ClipEventMouseDown)
+			for (auto it = actions->ClipActionRecords.begin(); it != actions->ClipActionRecords.end(); it++)
+			{
+				if( (e->type == "mouseDown" && it->EventFlags.ClipEventMouseDown)
 					|| (e->type == "mouseUp" && it->EventFlags.ClipEventMouseUp)
 					|| (e->type == "click" && it->EventFlags.ClipEventRelease)
 					|| (e->type == "mouseDown" && it->EventFlags.ClipEventPress)
@@ -1852,9 +1858,10 @@ bool MovieClip::AVM1HandleMouseEvent(EventDispatcher *dispatcher, MouseEvent *e)
 					|| (e->type == "rollOut" && it->EventFlags.ClipEventRollOut)
 					|| (e->type == "releaseOutside" && it->EventFlags.ClipEventReleaseOutside)
 					)
-			{
-				std::map<uint32_t,asAtom> m;
-				ACTIONRECORD::executeActions(this,this->getCurrentFrame()->getAVM1Context(),it->actions,it->startactionpos,m);
+				{
+					std::map<uint32_t,asAtom> m;
+					ACTIONRECORD::executeActions(this,this->getCurrentFrame()->getAVM1Context(),it->actions,it->startactionpos,m);
+				}
 			}
 		}
 		AVM1HandleMouseEventStandard(dispobj.getPtr(),e);
@@ -1866,22 +1873,27 @@ void MovieClip::AVM1HandleEvent(EventDispatcher *dispatcher, Event* e)
 	std::map<uint32_t,asAtom> m;
 	if (dispatcher == this)
 	{
-		for (auto it = actions.ClipActionRecords.begin(); it != actions.ClipActionRecords.end(); it++)
+		if (this->actions)
 		{
-			if (e->type == "complete" && it->EventFlags.ClipEventLoad)
+			for (auto it = actions->ClipActionRecords.begin(); it != actions->ClipActionRecords.end(); it++)
 			{
-				ACTIONRECORD::executeActions(this,this->getCurrentFrame()->getAVM1Context(),it->actions,it->startactionpos,m);
-			}
-			if (e->type == "enterFrame" && it->EventFlags.ClipEventEnterFrame)
-			{
-				if (!this->isOnStage())
-					return;
-				if (!this->state.explicit_FP)
+				if (e->type == "complete" && it->EventFlags.ClipEventLoad)
+				{
 					ACTIONRECORD::executeActions(this,this->getCurrentFrame()->getAVM1Context(),it->actions,it->startactionpos,m);
-			}
-			if (e->type == "load" && it->EventFlags.ClipEventLoad)
-			{
-				ACTIONRECORD::executeActions(this,this->getCurrentFrame()->getAVM1Context(),it->actions,it->startactionpos,m);
+				}
+				if (e->type == "enterFrame" && it->EventFlags.ClipEventEnterFrame)
+				{
+					if (!this->isOnStage())
+						return;
+					if (!this->state.explicit_FP)
+					{
+						ACTIONRECORD::executeActions(this,this->getCurrentFrame()->getAVM1Context(),it->actions,it->startactionpos,m);
+					}
+				}
+				if (e->type == "load" && it->EventFlags.ClipEventLoad)
+				{
+					ACTIONRECORD::executeActions(this,this->getCurrentFrame()->getAVM1Context(),it->actions,it->startactionpos,m);
+				}
 			}
 		}
 		if (e->type == "enterFrame")
@@ -1927,21 +1939,22 @@ void MovieClip::AVM1HandleEvent(EventDispatcher *dispatcher, Event* e)
 
 void MovieClip::setupActions(const CLIPACTIONS &clipactions)
 {
-	actions = clipactions;
-	if (this->actions.AllEventFlags.ClipEventMouseDown ||
-			this->actions.AllEventFlags.ClipEventMouseMove ||
-			this->actions.AllEventFlags.ClipEventPress ||
-			this->actions.AllEventFlags.ClipEventMouseUp)
+	actions = &clipactions;
+	if (this->actions->AllEventFlags.ClipEventMouseDown ||
+			this->actions->AllEventFlags.ClipEventMouseMove ||
+			this->actions->AllEventFlags.ClipEventPress ||
+			this->actions->AllEventFlags.ClipEventMouseUp)
 	{
 		setMouseEnabled(true);
 		getSystemState()->stage->AVM1AddMouseListener(this);
 	}
-	if (this->actions.AllEventFlags.ClipEventKeyDown ||
-			this->actions.AllEventFlags.ClipEventKeyUp)
+	if (this->actions->AllEventFlags.ClipEventKeyDown ||
+			this->actions->AllEventFlags.ClipEventKeyUp)
 		getSystemState()->stage->AVM1AddKeyboardListener(this);
-	if (this->actions.AllEventFlags.ClipEventLoad)
+
+	if (this->actions->AllEventFlags.ClipEventLoad)
 		getSystemState()->stage->AVM1AddEventListener(this);
-	if (this->actions.AllEventFlags.ClipEventEnterFrame)
+	if (this->actions->AllEventFlags.ClipEventEnterFrame)
 	{
 		this->incRef();
 		getSystemState()->registerFrameListener(_MR(this));
@@ -2074,8 +2087,19 @@ ASFUNCTIONBODY_ATOM(MovieClip,AVM1CreateEmptyMovieClip)
 ASFUNCTIONBODY_ATOM(MovieClip,AVM1RemoveMovieClip)
 {
 	MovieClip* th=asAtomHandler::as<MovieClip>(obj);
-	if (th->getParent())
+	if (th->getParent() && !th->legacy)
+	{
+		if (th->name != BUILTIN_STRINGS::EMPTY)
+		{
+			multiname m(nullptr);
+			m.name_type=multiname::NAME_STRING;
+			m.name_s_id=th->name;
+			m.ns.emplace_back(sys,BUILTIN_STRINGS::EMPTY,NAMESPACE);
+			m.isAttribute = false;
+			th->getParent()->deleteVariableByMultiname(m);
+		}
 		th->getParent()->_removeChild(th);
+	}
 }
 ASFUNCTIONBODY_ATOM(MovieClip,AVM1Clear)
 {
@@ -2178,7 +2202,7 @@ ASFUNCTIONBODY_ATOM(MovieClip,AVM1LoadMovie)
 //	MovieClip* th=asAtomHandler::as<MovieClip>(obj);
 	tiny_string url;
 	tiny_string method;
-	ARG_UNPACK_ATOM(url)(method,"GET");
+	ARG_UNPACK_ATOM(url,"")(method,"GET");
 	LOG(LOG_NOT_IMPLEMENTED,"MovieClip.loadMovie not implemented "<<url<<" "<<method);
 }
 ASFUNCTIONBODY_ATOM(MovieClip,AVM1UnloadMovie)
@@ -2299,6 +2323,7 @@ void DisplayObjectContainer::checkColorTransformForLegacyChildAt(int32_t depth,c
 	else
 		o->colorTransform->setProperties(colortransform);
 	o->hasChanged=true;
+	o->needsTextureRecalculation=true;
 	this->hasChanged=true;
 	this->requestInvalidation(getSystemState());
 }
@@ -2315,7 +2340,7 @@ void DisplayObjectContainer::deleteLegacyChildAt(int32_t depth)
 		namedRemovedLegacyChildren[obj->name] = obj;
 		//The variable is not deleted, but just set to null
 		//This is a tested behavior
-		multiname objName(NULL);
+		multiname objName(nullptr);
 		objName.name_type=multiname::NAME_STRING;
 		objName.name_s_id=obj->name;
 		objName.ns.emplace_back(getSystemState(),BUILTIN_STRINGS::EMPTY,NAMESPACE);
@@ -2411,7 +2436,7 @@ uint32_t DisplayObjectContainer::getMaxLegacyChildDepth()
 }
 void DisplayObjectContainer::checkClipDepth()
 {
-	DisplayObject* clipobj = NULL;
+	DisplayObject* clipobj = nullptr;
 	int depth = 0;
 	for (auto it=mapDepthToLegacyChild.begin(); it != mapDepthToLegacyChild.end(); it++)
 	{
@@ -2419,8 +2444,8 @@ void DisplayObjectContainer::checkClipDepth()
 		depth = it->first;
 		if (obj->ClipDepth)
 		{
-			if (clipobj)
-				clipobj->hasChanged = false; // ensure clipobj is not rendered
+//			if (clipobj)
+//				clipobj->hasChanged = false; // ensure clipobj is not rendered
 			clipobj = obj;
 		}
 		else if (clipobj && clipobj->ClipDepth > depth)
@@ -2431,8 +2456,8 @@ void DisplayObjectContainer::checkClipDepth()
 		else
 			obj->setMask(NullRef);
 	}
-	if (clipobj)
-		clipobj->hasChanged = false; // ensure clipobj is not rendered
+//	if (clipobj)
+//		clipobj->hasChanged = false; // ensure clipobj is not rendered
 }
 
 bool DisplayObjectContainer::destruct()
@@ -2607,11 +2632,11 @@ void DisplayObjectContainer::setOnStage(bool staged, bool force)
 		{
 			Locker l(mutexDisplayList);
 			displayListCopy.assign(dynamicDisplayList.begin(),
-					       dynamicDisplayList.end());
+						   dynamicDisplayList.end());
 		}
 		DisplayObject::setOnStage(staged,force);
 		//Notify children
-		//calling DisplayObject::setOnStage may have changed the onStage state of the children, 
+		//calling DisplayObject::setOnStage may have changed the onStage state of the children,
 		//but the addedToStage/removedFromStage event must always be dispatched
 		std::vector<_R<DisplayObject>>::const_iterator it=displayListCopy.begin();
 		for(;it!=displayListCopy.end();++it)
@@ -2643,7 +2668,7 @@ ASFUNCTIONBODY_ATOM(DisplayObjectContainer,_setMouseChildren)
 	th->mouseChildren=asAtomHandler::Boolean_concrete(args[0]);
 }
 
-void DisplayObjectContainer::requestInvalidation(InvalidateQueue* q)
+void DisplayObjectContainer::requestInvalidation(InvalidateQueue* q, bool forceTextureRefresh)
 {
 	DisplayObject::requestInvalidation(q);
 	Locker l(mutexDisplayList);
@@ -2651,7 +2676,7 @@ void DisplayObjectContainer::requestInvalidation(InvalidateQueue* q)
 	for(;it!=dynamicDisplayList.end();++it)
 	{
 		(*it)->hasChanged = true;
-		(*it)->requestInvalidation(q);
+		(*it)->requestInvalidation(q,forceTextureRefresh);
 	}
 }
 
@@ -2692,6 +2717,8 @@ bool DisplayObjectContainer::_removeChild(DisplayObject* child)
 {
 	if(!child->getParent() || child->getParent()!=this)
 		return false;
+	if (!getSystemState()->mainClip->usesActionScript3)
+		child->removeAVM1Listeners();
 
 	{
 		Locker l(mutexDisplayList);
@@ -2726,7 +2753,9 @@ void DisplayObjectContainer::_removeAllChildren()
 		child->setOnStage(false);
 		child->setParent(nullptr);
 		child->setMask(NullRef);
-		
+		if (!getSystemState()->mainClip->usesActionScript3)
+			child->removeAVM1Listeners();
+
 		//Erase this from the legacy child map (if it is in there)
 		auto it2 = mapLegacyChildToDepth.find(child.getPtr());
 		if (it2 != mapLegacyChildToDepth.end())
@@ -2736,6 +2765,21 @@ void DisplayObjectContainer::_removeAllChildren()
 		}
 		it = dynamicDisplayList.erase(it);
 	}
+}
+
+void DisplayObjectContainer::removeAVM1Listeners()
+{
+	if (getSystemState()->mainClip->usesActionScript3)
+		return;
+	Locker l(mutexDisplayList);
+	auto it=dynamicDisplayList.begin();
+	while (it!=dynamicDisplayList.end())
+	{
+		_R<DisplayObject> child = *it;
+		child->removeAVM1Listeners();
+		it++;
+	}
+	DisplayObject::removeAVM1Listeners();
 }
 
 bool DisplayObjectContainer::_contains(_R<DisplayObject> d)
@@ -3091,12 +3135,23 @@ void DisplayObjectContainer::getObjectsFromPoint(Point* point, Array *ar)
 	}
 }
 
-Shape::Shape(Class_base* c):DisplayObject(c),TokenContainer(this, this->getSystemState()->shapeTokenMemory),graphics(NullRef)
+bool Shape::boundsRect(number_t &xmin, number_t &xmax, number_t &ymin, number_t &ymax) const
+{
+	if (!this->legacy)
+		return TokenContainer::boundsRect(xmin,xmax,ymin,ymax);
+	xmin=bounds.Xmin/20.0;
+	xmax=bounds.Xmax/20.0;
+	ymin=bounds.Ymin/20.0;
+	ymax=bounds.Ymax/20.0;
+	return true;
+}
+
+Shape::Shape(Class_base* c):DisplayObject(c),TokenContainer(this, this->getSystemState()->shapeTokenMemory),graphics(NullRef),fromDefineShapeTag(0)
 {
 }
 
-Shape::Shape(Class_base* c, const tokensVector& tokens, float scaling):
-	DisplayObject(c),TokenContainer(this, this->getSystemState()->shapeTokenMemory, tokens, scaling),graphics(NullRef)
+Shape::Shape(Class_base* c, const tokensVector& tokens, float scaling, uint32_t tagID, const RECT &_bounds):
+	DisplayObject(c),TokenContainer(this, this->getSystemState()->shapeTokenMemory, tokens, scaling),graphics(NullRef),fromDefineShapeTag(tagID),bounds(_bounds)
 {
 }
 
@@ -3154,6 +3209,7 @@ void MorphShape::checkRatio(uint32_t ratio)
 {
 	TokenContainer::FromDefineMorphShapeTagToShapeVector(getSystemState(),this->morphshapetag,tokens,ratio);
 	this->hasChanged = true;
+	this->needsTextureRecalculation=true;
 	if (isOnStage())
 		requestInvalidation(getSystemState());
 }
@@ -3530,7 +3586,9 @@ void Stage::AVM1HandleEvent(EventDispatcher* dispatcher, Event* e)
 			getSystemState()->getInputThread()->lastKeyUp = e->as<KeyboardEvent>()->getSDLKeyCode();
 			getSystemState()->getInputThread()->lastKeyDown = 0;
 		}
+		avm1listenerMutex.lock();
 		vector<_R<ASObject>> tmplisteners = avm1KeyboardListeners;
+		avm1listenerMutex.unlock();
 		// eventhandlers may change the listener list, so we work on a copy
 		auto it = tmplisteners.rbegin();
 		while (it != tmplisteners.rend())
@@ -3542,7 +3600,9 @@ void Stage::AVM1HandleEvent(EventDispatcher* dispatcher, Event* e)
 	}
 	else if (e->is<MouseEvent>())
 	{
+		avm1listenerMutex.lock();
 		vector<_R<ASObject>> tmplisteners = avm1MouseListeners;
+		avm1listenerMutex.unlock();
 		// eventhandlers may change the listener list, so we work on a copy
 		auto it = tmplisteners.rbegin();
 		while (it != tmplisteners.rend())
@@ -3552,9 +3612,11 @@ void Stage::AVM1HandleEvent(EventDispatcher* dispatcher, Event* e)
 			it++;
 		}
 	}
-	else 
+	else
 	{
+		avm1listenerMutex.lock();
 		vector<_R<ASObject>> tmplisteners = avm1EventListeners;
+		avm1listenerMutex.unlock();
 		// eventhandlers may change the listener list, so we work on a copy
 		auto it = tmplisteners.rbegin();
 		while (it != tmplisteners.rend())
@@ -3567,6 +3629,7 @@ void Stage::AVM1HandleEvent(EventDispatcher* dispatcher, Event* e)
 
 void Stage::AVM1AddKeyboardListener(ASObject *o)
 {
+	Locker l(avm1listenerMutex);
 	for (auto it = avm1KeyboardListeners.begin(); it != avm1KeyboardListeners.end(); it++)
 	{
 		if ((*it).getPtr() == o)
@@ -3578,6 +3641,7 @@ void Stage::AVM1AddKeyboardListener(ASObject *o)
 
 void Stage::AVM1RemoveKeyboardListener(ASObject *o)
 {
+	Locker l(avm1listenerMutex);
 	for (auto it = avm1KeyboardListeners.begin(); it != avm1KeyboardListeners.end(); it++)
 	{
 		if ((*it).getPtr() == o)
@@ -3589,6 +3653,7 @@ void Stage::AVM1RemoveKeyboardListener(ASObject *o)
 }
 void Stage::AVM1AddMouseListener(ASObject *o)
 {
+	Locker l(avm1listenerMutex);
 	for (auto it = avm1MouseListeners.begin(); it != avm1MouseListeners.end(); it++)
 	{
 		if ((*it).getPtr() == o)
@@ -3600,6 +3665,7 @@ void Stage::AVM1AddMouseListener(ASObject *o)
 
 void Stage::AVM1RemoveMouseListener(ASObject *o)
 {
+	Locker l(avm1listenerMutex);
 	for (auto it = avm1MouseListeners.begin(); it != avm1MouseListeners.end(); it++)
 	{
 		if ((*it).getPtr() == o)
@@ -3611,6 +3677,7 @@ void Stage::AVM1RemoveMouseListener(ASObject *o)
 }
 void Stage::AVM1AddEventListener(ASObject *o)
 {
+	Locker l(avm1listenerMutex);
 	for (auto it = avm1EventListeners.begin(); it != avm1EventListeners.end(); it++)
 	{
 		if ((*it).getPtr() == o)
@@ -3621,6 +3688,7 @@ void Stage::AVM1AddEventListener(ASObject *o)
 }
 void Stage::AVM1RemoveEventListener(ASObject *o)
 {
+	Locker l(avm1listenerMutex);
 	for (auto it = avm1EventListeners.begin(); it != avm1EventListeners.end(); it++)
 	{
 		if ((*it).getPtr() == o)
@@ -3914,6 +3982,7 @@ void Bitmap::updatedData()
 	tokens.filltokens.emplace_back(_MR(new GeomToken(STRAIGHT, Vector2(style.bitmap->getWidth(), 0))));
 	tokens.filltokens.emplace_back(_MR(new GeomToken(STRAIGHT, Vector2(0, 0))));
 	hasChanged=true;
+	needsTextureRecalculation=true;
 	if(onStage)
 		requestInvalidation(getSystemState());
 }
@@ -4317,38 +4386,38 @@ IDrawable *SimpleButton::invalidate(DisplayObject *target, const MATRIX &initial
 		hitTestState->invalidate(target,initialMatrix,smoothing);
 	return DisplayObjectContainer::invalidate(target, initialMatrix,smoothing);
 }
-void SimpleButton::requestInvalidation(InvalidateQueue* q)
+void SimpleButton::requestInvalidation(InvalidateQueue* q, bool forceTextureRefresh)
 {
 	if (!upState.isNull())
 	{
 		upState->hasChanged = true;
 		if (upState->colorTransform.isNull())
 			upState->colorTransform = this->colorTransform;
-		upState->requestInvalidation(q);
+		upState->requestInvalidation(q,forceTextureRefresh);
 	}
 	if (!overState.isNull())
 	{
 		overState->hasChanged = true;
 		if (overState->colorTransform.isNull())
 			overState->colorTransform = this->colorTransform;
-		overState->requestInvalidation(q);
+		overState->requestInvalidation(q,forceTextureRefresh);
 	}
 	if (!downState.isNull())
 	{
 		downState->hasChanged = true;
 		if (downState->colorTransform.isNull())
 			downState->colorTransform = this->colorTransform;
-		downState->requestInvalidation(q);
+		downState->requestInvalidation(q,forceTextureRefresh);
 	}
 	if (!hitTestState.isNull())
 	{
 		hitTestState->hasChanged = true;
 		if (hitTestState->colorTransform.isNull())
 			hitTestState->colorTransform = this->colorTransform;
-		hitTestState->requestInvalidation(q);
+		hitTestState->requestInvalidation(q,forceTextureRefresh);
 	}
 	
-	DisplayObjectContainer::requestInvalidation(q);
+	DisplayObjectContainer::requestInvalidation(q,forceTextureRefresh);
 }
 
 uint32_t SimpleButton::getTagID() const

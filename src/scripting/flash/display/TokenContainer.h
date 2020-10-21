@@ -52,7 +52,7 @@ public:
 	tokensVector tokens;
 	static void FromShaperecordListToShapeVector(const std::vector<SHAPERECORD>& shapeRecords,
 					 tokensVector& tokens, const std::list<FILLSTYLE>& fillStyles,
-					 const MATRIX& matrix = MATRIX(), const std::list<LINESTYLE2>& lineStyles = std::list<LINESTYLE2>());
+					 const MATRIX& matrix = MATRIX(), const std::list<LINESTYLE2>& lineStyles = std::list<LINESTYLE2>(), const RECT &shapebounds= RECT());
 	static void FromDefineMorphShapeTagToShapeVector(SystemState *sys, DefineMorphShapeTag *tag,
 					 tokensVector& tokens, uint16_t ratio);
 	static void getTextureSize(std::vector<_NR<GeomToken>, reporter_allocator<_NR<GeomToken>>> &tokens, int *width, int *height);
@@ -62,7 +62,7 @@ protected:
 	TokenContainer(DisplayObject* _o, MemoryAccount* _m);
 	TokenContainer(DisplayObject* _o, MemoryAccount* _m, const tokensVector& _tokens, float _scaling);
 	IDrawable* invalidate(DisplayObject* target, const MATRIX& initialMatrix, bool smoothing);
-	void requestInvalidation(InvalidateQueue* q);
+	void requestInvalidation(InvalidateQueue* q, bool forceTextureRefresh=false);
 	bool boundsRect(number_t& xmin, number_t& xmax, number_t& ymin, number_t& ymax) const;
 	_NR<DisplayObject> hitTestImpl(_NR<DisplayObject> last, number_t x, number_t y, DisplayObject::HIT_TYPE type) const;
 	bool renderImpl(RenderContext& ctxt) const;
