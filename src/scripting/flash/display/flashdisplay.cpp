@@ -485,7 +485,7 @@ void LoaderThread::execute()
 	}
 	if (loader.getPtr() && local_pt.getRootMovie() && local_pt.getRootMovie()->hasFinishedLoading())
 	{
-		if (local_pt.getRootMovie() != loader->getSystemState()->mainClip)
+		if (local_pt.getRootMovie() != loader->getSystemState()->mainClip && !local_pt.getRootMovie()->hasMainClass)
 		{
 			if (!local_pt.getRootMovie()->usesActionScript3)
 				local_pt.getRootMovie()->setIsInitialized(false);
@@ -785,6 +785,8 @@ void Loader::setContent(_R<DisplayObject> o)
 	{
 		_addChildAt(o, 0);
 	}
+	if (!o->loaderInfo.isNull())
+		o->loaderInfo->setComplete();
 }
 
 Sprite::Sprite(Class_base* c):DisplayObjectContainer(c),TokenContainer(this, this->getSystemState()->spriteTokenMemory),graphics(NullRef),dragged(false),buttonMode(false),useHandCursor(false)
@@ -996,11 +998,15 @@ void DisplayObjectContainer::LegacyChildEraseDeletionMarked()
 	namedRemovedLegacyChildren.clear();
 }
 
-void DisplayObjectContainer::LegacyChildRemoveDeletionMark(int32_t depth)
+bool DisplayObjectContainer::LegacyChildRemoveDeletionMark(int32_t depth)
 {
 	auto it = legacyChildrenMarkedForDeletion.find(depth);
 	if (it != legacyChildrenMarkedForDeletion.end())
+	{
 		legacyChildrenMarkedForDeletion.erase(it);
+		return true;
+	}
+	return false;
 }
 
 DisplayObject *DisplayObjectContainer::findRemovedLegacyChild(uint32_t name)
@@ -2323,9 +2329,7 @@ void DisplayObjectContainer::checkColorTransformForLegacyChildAt(int32_t depth,c
 	else
 		o->colorTransform->setProperties(colortransform);
 	o->hasChanged=true;
-	o->needsTextureRecalculation=true;
-	this->hasChanged=true;
-	this->requestInvalidation(getSystemState());
+	o->requestInvalidation(getSystemState());
 }
 
 void DisplayObjectContainer::deleteLegacyChildAt(int32_t depth)
@@ -4350,10 +4354,26 @@ SimpleButton::SimpleButton(Class_base* c, DisplayObject *dS, DisplayObject *hTS,
 	/* When called from DefineButton2Tag::instance, they are not constructed yet
 	 * TODO: construct them here for once, or each time they become visible?
 	 */
-	if(dS) dS->initFrame();
-	if(hTS) hTS->initFrame();
-	if(oS) oS->initFrame();
-	if(uS) uS->initFrame();
+	if(dS)
+	{
+		dS->advanceFrame();
+		dS->initFrame();
+	}
+	if(hTS)
+	{
+		hTS->advanceFrame();
+		hTS->initFrame();
+	}
+	if(oS)
+	{
+		oS->advanceFrame();
+		oS->initFrame();
+	}
+	if(uS)
+	{
+		uS->advanceFrame();
+		uS->initFrame();
+	}
 
 	tabEnabled = true;
 }
@@ -4978,7 +4998,7 @@ void MovieClip::constructionComplete()
 	{
 		advanceFrame();
 		initFrame();
-		if (!getSystemState()->mainClip->usesActionScript3 && !this->is<RootMovieClip>() && !this->inAVM1Attachment)
+		if (!getSystemState()->mainClip->usesActionScript3 && this!=getSystemState()->mainClip && !this->inAVM1Attachment)
 			executeFrameScript();
 	}
 }

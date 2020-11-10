@@ -3181,13 +3181,20 @@ void ABCVm::preloadFunction(SyntheticFunction* function)
 					}
 					if(asAtomHandler::isInvalid(o))
 					{
-						ASObject* var = mi->context->root->applicationDomain->getVariableByMultinameOpportunistic(*name);
-						if (var)
-							o = asAtomHandler::fromObject(var);
+						GET_VARIABLE_OPTION opt= (GET_VARIABLE_OPTION)(FROM_GETLEX | DONT_CALL_GETTER | NO_INCREF);
+						mi->context->root->applicationDomain->getVariableByMultiname(o,*name,opt);
+					}
+					if (asAtomHandler::is<Template_base>(o))
+					{
+						addCachedConstant(state,mi, o,code);
+						typestack.push_back(typestackentry(nullptr,false));
+						break;
 					}
 					if (asAtomHandler::is<Class_base>(o))
 					{
 						resulttype = asAtomHandler::as<Class_base>(o);
+						if (resulttype->is<Class_inherit>())
+							resulttype->as<Class_inherit>()->checkScriptInit();
 						if (asAtomHandler::as<Class_base>(o)->isConstructed() || asAtomHandler::as<Class_base>(o)->isBuiltin())
 						{
 							addCachedConstant(state,mi, o,code);
@@ -4529,8 +4536,8 @@ void ABCVm::preloadFunction(SyntheticFunction* function)
 				{
 					state.preloadedcode.push_back((uint32_t)opcode);
 					clearOperands(state,true,&lastlocalresulttype);
-					state.preloadedcode.push_back(t);
-					state.preloadedcode.push_back(argcount);
+					state.preloadedcode.back().pcode.arg1_uint=t;
+					state.preloadedcode.back().pcode.arg2_uint=argcount;
 					typestack.push_back(typestackentry(nullptr,false));
 				}
 				break;

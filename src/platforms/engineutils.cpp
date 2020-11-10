@@ -31,6 +31,10 @@
 #include "abc.h"
 #include "class.h"
 #include "scripting/flash/events/flashevents.h"
+#include <glib/gstdio.h>
+#include <fcntl.h>
+#include <sys/types.h>
+#include <sys/stat.h>
 
 //The interpretation of texture data change with the endianness
 #if __BYTE_ORDER == __BIG_ENDIAN
@@ -209,8 +213,8 @@ public:
 	}
 	void tickFence() override
 	{
-		delete this;
 		m_engine->resetSDLEventTicker();
+		delete this;
 	}
 };
 
@@ -304,6 +308,80 @@ void EngineData::showWindow(uint32_t w, uint32_t h)
 		SDL_ShowWindow(widget);
 	grabFocus();
 	
+}
+
+std::string EngineData::getsharedobjectfilename(const tiny_string& name)
+{
+	tiny_string subdir = sharedObjectDatapath + G_DIR_SEPARATOR_S;
+	subdir += "sharedObjects";
+	g_mkdir_with_parents(subdir.raw_buf(),0700);
+
+	std::string p = subdir.raw_buf();
+	p += G_DIR_SEPARATOR_S;
+	p += "shared_";
+	p += name.raw_buf();
+	p += ".sol";
+	return p;
+}
+void EngineData::setLocalStorageAllowedMarker(bool allowed)
+{
+	tiny_string subdir = sharedObjectDatapath + G_DIR_SEPARATOR_S;
+	g_mkdir_with_parents(subdir.raw_buf(),0700);
+
+	std::string p = subdir.raw_buf();
+	p += G_DIR_SEPARATOR_S;
+	p += "localStorageAllowed";
+	if (allowed)
+		g_creat(p.c_str(),0600);
+	else
+		g_unlink(p.c_str());
+}
+bool EngineData::getLocalStorageAllowedMarker()
+{
+	tiny_string subdir = sharedObjectDatapath + G_DIR_SEPARATOR_S;
+	if (!g_file_test(subdir.raw_buf(),G_FILE_TEST_EXISTS))
+		return false;
+	g_mkdir_with_parents(subdir.raw_buf(),0700);
+
+	std::string p = subdir.raw_buf();
+	p += G_DIR_SEPARATOR_S;
+	p += "localStorageAllowed";
+	return g_file_test(p.c_str(),G_FILE_TEST_EXISTS);
+}
+bool EngineData::fillSharedObject(const tiny_string &name, ByteArray *data)
+{
+	if (!getLocalStorageAllowedMarker())
+		return false;
+	std::string p = getsharedobjectfilename(name);
+	if (!g_file_test(p.c_str(),G_FILE_TEST_EXISTS))
+		return false;
+	GStatBuf st_buf;
+	g_stat(p.c_str(),&st_buf);
+	uint32_t len = st_buf.st_size;
+	std::ifstream file;
+	uint8_t buf[len];
+	file.open(p, std::ios::in|std::ios::binary);
+	file.read((char*)buf,len);
+	data->writeBytes(buf,len);
+	file.close();
+	return true;
+}
+bool EngineData::flushSharedObject(const tiny_string &name, ByteArray *data)
+{
+	if (!getLocalStorageAllowedMarker())
+		return false;
+	std::string p = getsharedobjectfilename(name);
+	std::ofstream file;
+	file.open(p, std::ios::out|std::ios::binary|std::ios::trunc);
+	uint8_t* buf = data->getBuffer(data->getLength(),false);
+	file.write((char*)buf,data->getLength());
+	file.close();
+	return true;
+}
+void EngineData::removeSharedObject(const tiny_string &name)
+{
+	std::string p = getsharedobjectfilename(name);
+	g_unlink(p.c_str());
 }
 
 void EngineData::setDisplayState(const tiny_string &displaystate)
@@ -404,6 +482,12 @@ void EngineData::selectContextMenuItemIntern()
 	if (contextmenucurrentitem >=0)
 	{
 		NativeMenuItem* item = currentcontextmenuitems.at(contextmenucurrentitem).getPtr();
+		if (item->label == "Settings")
+		{
+			item->getSystemState()->getRenderThread()->inSettings=true;
+			closeContextMenu();
+			return;
+		}
 		if (item->label=="Save" ||
 			item->label=="Zoom In" ||
 			item->label=="Zoom Out" ||
@@ -415,8 +499,7 @@ void EngineData::selectContextMenuItemIntern()
 			item->label=="Rewind" ||
 			item->label=="Forward" ||
 			item->label=="Back" ||
-			item->label=="Print" ||
-			item->label=="Settings")
+			item->label=="Print")
 		{
 			closeContextMenu();
 			tiny_string msg("context menu handling not implemented for \"");
@@ -620,6 +703,10 @@ void EngineData::exec_glUniform1f(int location,float v0)
 void EngineData::exec_glUniform2f(int location,float v0,float v1)
 {
 	glUniform2f(location,v0,v1);
+}
+void EngineData::exec_glUniform4f(int location,float v0,float v1,float v2,float v3)
+{
+	glUniform4f(location,v0,v1,v2,v3);
 }
 
 void EngineData::exec_glBindTexture_GL_TEXTURE_2D(uint32_t id)
@@ -1260,20 +1347,28 @@ int EngineData::audio_getSampleRate()
 	return MIX_DEFAULT_FREQUENCY;
 }
 
-IDrawable *EngineData::getTextRenderDrawable(const TextData &_textData, const MATRIX &_m, int32_t _x, int32_t _y, int32_t _w, int32_t _h, int32_t _rx, int32_t _ry, int32_t _rw, int32_t _rh, float _r, float _xs, float _ys, bool _im, bool _hm, float _s, float _a, const std::vector<IDrawable::MaskData> &_ms, bool smoothing)
+IDrawable *EngineData::getTextRenderDrawable(const TextData &_textData, const MATRIX &_m, int32_t _x, int32_t _y, int32_t _w, int32_t _h, int32_t _rx, int32_t _ry, int32_t _rw, int32_t _rh, float _r, float _xs, float _ys, bool _im, bool _hm, float _s, float _a, const std::vector<IDrawable::MaskData> &_ms, float _redMultiplier, float _greenMultiplier, float _blueMultiplier, float _alphaMultiplier, float _redOffset, float _greenOffset, float _blueOffset, float _alphaOffset, bool smoothing)
 {
 	if (hasExternalFontRenderer)
-		return new externalFontRenderer(_textData,this, _x, _y, _w, _h, _rx,_ry,_rw,_rh,_r,_xs,_ys,_im,_hm, _a, _ms,smoothing);
+		return new externalFontRenderer(_textData,this, _x, _y, _w, _h, _rx,_ry,_rw,_rh,_r,_xs,_ys,_im,_hm, _a, _ms,
+										_redMultiplier,_greenMultiplier,_blueMultiplier,_alphaMultiplier,
+										_redOffset,_greenOffset,_blueOffset,_alphaOffset,
+										smoothing);
 	return nullptr;
 }
 
-externalFontRenderer::externalFontRenderer(const TextData &_textData, EngineData *engine, int32_t x, int32_t y, int32_t w, int32_t h, int32_t rx, int32_t ry, int32_t rw, int32_t rh, float r, float xs, float ys, bool im, bool hm, float a, const std::vector<IDrawable::MaskData> &m, bool smoothing)
-	: IDrawable(w, h, x, y,rw,rh,rx,ry,r,xs,ys,im,hm, a, m),m_engine(engine)
+externalFontRenderer::externalFontRenderer(const TextData &_textData, EngineData *engine, int32_t x, int32_t y, int32_t w, int32_t h, int32_t rx, int32_t ry, int32_t rw, int32_t rh, float r, float xs, float ys, bool im, bool hm, float a, const std::vector<IDrawable::MaskData> &m,
+										   float _redMultiplier,float _greenMultiplier,float _blueMultiplier,float _alphaMultiplier,
+										   float _redOffset,float _greenOffset,float _blueOffset,float _alphaOffset,
+										   bool smoothing)
+	: IDrawable(w, h, x, y,rw,rh,rx,ry,r,xs,ys,im,hm, a, m,
+				_redMultiplier,_greenMultiplier,_blueMultiplier,_alphaMultiplier,
+				_redOffset,_greenOffset,_blueOffset,_alphaOffset),m_engine(engine)
 {
 	externalressource = engine->setupFontRenderer(_textData,a,smoothing);
 }
 
-uint8_t *externalFontRenderer::getPixelBuffer()
+uint8_t *externalFontRenderer::getPixelBuffer(float scalex, float scaley)
 {
 	return m_engine->getFontPixelBuffer(externalressource,this->width,this->height);
 }

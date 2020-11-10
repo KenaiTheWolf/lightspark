@@ -29,6 +29,12 @@
 #include "flash/utils/ByteArray.h"
 #include <sys/stat.h>
 
+#ifdef __MINGW32__
+    #ifndef PATH_MAX
+    #define PATH_MAX _MAX_PATH
+    #endif
+    #define realpath(N,R) _fullpath((R),(N),_MAX_PATH)
+#endif
 using namespace std;
 using namespace lightspark;
 
@@ -72,8 +78,9 @@ class StandaloneEngineData: public EngineData
 		return st.st_size;
 	}
 public:
-	StandaloneEngineData()
+	StandaloneEngineData(const tiny_string& datapath)
 	{
+		sharedObjectDatapath=datapath;
 	}
 	~StandaloneEngineData()
 	{
@@ -92,27 +99,27 @@ public:
 		return window;
 	}
 	
-	uint32_t getWindowForGnash()
+	uint32_t getWindowForGnash() override
 	{
 		/* passing and invalid window id to gnash makes
 		 * it create its own window */
 		return 0;
 	}
-	void stopMainDownload() {}
-	bool isSizable() const
+	void stopMainDownload() override {}
+	bool isSizable() const override
 	{
 		return true;
 	}
-	void grabFocus()
+	void grabFocus() override
 	{
 		/* Nothing to do because the standalone main window is
 		 * always focused */
 	}
-	void openPageInBrowser(const tiny_string& url, const tiny_string& window)
+	void openPageInBrowser(const tiny_string& url, const tiny_string& window) override
 	{
 		LOG(LOG_NOT_IMPLEMENTED, "openPageInBrowser not implemented in the standalone mode");
 	}
-	bool getScreenData(SDL_DisplayMode* screen)
+	bool getScreenData(SDL_DisplayMode* screen) override
 	{
 		if (SDL_GetDesktopDisplayMode(0, screen) != 0) {
 			LOG(LOG_ERROR,"Capabilities: SDL_GetDesktopDisplayMode failed:"<<SDL_GetError());
@@ -120,7 +127,7 @@ public:
 		}
 		return true;
 	}
-	double getScreenDPI()
+	double getScreenDPI() override
 	{
 #if SDL_VERSION_ATLEAST(2, 0, 4)
 		float ddpi;
@@ -133,25 +140,25 @@ public:
 		return 96.0;
 #endif
 	}
-	void DoSwapBuffers()
+	void DoSwapBuffers() override
 	{
 		uint32_t err;
 		if (getGLError(err))
 			LOG(LOG_ERROR,"swapbuffers:"<<widget<<" "<<err);
 		SDL_GL_SwapWindow(widget);
 	}
-	void InitOpenGL()
+	void InitOpenGL() override
 	{
 		mSDLContext = SDL_GL_CreateContext(widget);
 		if (!mSDLContext)
 			LOG(LOG_ERROR,"failed to create openGL context:"<<SDL_GetError());
 		initGLEW();
 	}
-	void DeinitOpenGL()
+	void DeinitOpenGL() override
 	{
 		SDL_GL_DeleteContext(mSDLContext);
 	}
-	bool FileExists(const tiny_string& filename)
+	bool FileExists(const tiny_string& filename) override
 	{
 		if (!isvalidfilename(filename))
 			return false;
@@ -162,7 +169,7 @@ public:
 		p += filename.raw_buf();
 		return g_file_test(p.c_str(),G_FILE_TEST_EXISTS);
 	}
-	tiny_string FileRead(const tiny_string& filename)
+	tiny_string FileRead(const tiny_string& filename) override
 	{
 		if (!isvalidfilename(filename))
 			return "";
@@ -183,7 +190,7 @@ public:
 		file.close();
 		return res;
 	}
-	void FileWrite(const tiny_string& filename, const tiny_string& data)
+	void FileWrite(const tiny_string& filename, const tiny_string& data) override
 	{
 		if (!isvalidfilename(filename))
 			return;
@@ -198,7 +205,7 @@ public:
 		file << data;
 		file.close();
 	}
-	void FileReadByteArray(const tiny_string &filename,ByteArray* res)
+	void FileReadByteArray(const tiny_string &filename,ByteArray* res) override
 	{
 		if (!isvalidfilename(filename))
 			return;
@@ -218,7 +225,7 @@ public:
 		file.close();
 	}
 	
-	void FileWriteByteArray(const tiny_string &filename, ByteArray *data)
+	void FileWriteByteArray(const tiny_string &filename, ByteArray *data) override
 	{
 		if (!isvalidfilename(filename))
 			return;
@@ -476,7 +483,19 @@ int main(int argc, char* argv[])
 	if(HTTPcookie)
 		sys->setCookies(HTTPcookie);
 
-	sys->setParamsAndEngine(new StandaloneEngineData(), true);
+	// create path for shared object local storage
+	char absolutepath[PATH_MAX];
+	realpath(fileName,absolutepath);
+	tiny_string homedir(g_get_home_dir());
+	tiny_string filedatapath = absolutepath;
+	if (filedatapath.find(homedir) == 0) // remove home dir, if file is located below home dir
+		filedatapath = filedatapath.substr_bytes(homedir.numBytes(),UINT32_MAX);
+	tiny_string sharedobjectdatapath = Config::getConfig()->getCacheDirectory();
+	sharedobjectdatapath += G_DIR_SEPARATOR_S;
+	sharedobjectdatapath += "data";
+	sharedobjectdatapath += filedatapath;
+
+	sys->setParamsAndEngine(new StandaloneEngineData(sharedobjectdatapath), true);
 
 	sys->securityManager->setSandboxType(sandboxType);
 	if(sandboxType == SecurityManager::REMOTE)

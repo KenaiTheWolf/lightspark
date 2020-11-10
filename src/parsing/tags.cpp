@@ -1226,11 +1226,6 @@ ASObject* DefineTextTag::instance(Class_base* c)
 	StaticText* ret=new (c->memoryAccount) StaticText(c, tokens,TextBounds);
 	return ret;
 }
-MATRIX DefineTextTag::MapToBounds(const MATRIX &mat)
-{
-	MATRIX m (1,1,0,0,TextBounds.Xmin/20,TextBounds.Ymin/20);
-	return mat.multiplyMatrix(m);
-}
 
 void DefineTextTag::computeCached() const
 {
@@ -1559,7 +1554,11 @@ void PlaceObject2Tag::execute(DisplayObjectContainer* parent, bool inskipping)
 	bool exists = parent->hasLegacyChildAt(LEGACY_DEPTH_START+Depth);
 	uint32_t nameID = 0;
 	DisplayObject* currchar=nullptr;
-	parent->LegacyChildRemoveDeletionMark(LEGACY_DEPTH_START+Depth);
+	if (parent->LegacyChildRemoveDeletionMark(LEGACY_DEPTH_START+Depth))
+	{
+		parent->deleteLegacyChildAt(LEGACY_DEPTH_START+Depth);
+		exists = false;
+	}
 	if (exists)
 	{
 		currchar = parent->getLegacyChildAt(LEGACY_DEPTH_START+Depth);
@@ -1667,7 +1666,7 @@ void PlaceObject2Tag::execute(DisplayObjectContainer* parent, bool inskipping)
 			parent->transformLegacyChildAt(LEGACY_DEPTH_START+Depth,Matrix);
 		}
 	}
-	if (exists && (currchar->getTagID() == CharacterId) && nameID) // reuse name of existing DispayObject at this depth
+	if (!inskipping && exists && (currchar->getTagID() == CharacterId) && nameID) // reuse name of existing DispayObject at this depth
 	{
 		currchar->name = nameID;
 		currchar->incRef();

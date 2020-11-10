@@ -147,7 +147,10 @@ void GLRenderContext::setProperties(AS_BLENDMODE blendmode)
 	}
 }
 void GLRenderContext::renderTextured(const TextureChunk& chunk, int32_t x, int32_t y, uint32_t w, uint32_t h,
-			float alpha, COLOR_MODE colorMode, float rotate, int32_t xtransformed, int32_t ytransformed, int32_t widthtransformed, int32_t heighttransformed, float xscale, float yscale, bool isMask, bool hasMask)
+			float alpha, COLOR_MODE colorMode, float rotate, int32_t xtransformed, int32_t ytransformed, int32_t widthtransformed, int32_t heighttransformed, float xscale, float yscale,
+									 float redMultiplier,float greenMultiplier,float blueMultiplier,float alphaMultiplier,
+									 float redOffset,float greenOffset,float blueOffset,float alphaOffset,
+									 bool isMask, bool hasMask)
 {
 	if (isMask)
 	{
@@ -171,6 +174,8 @@ void GLRenderContext::renderTextured(const TextureChunk& chunk, int32_t x, int32
 	engineData->exec_glUniform2f(afterRotateUniform, float(widthtransformed)/2.0,float(heighttransformed)/2.0);
 	engineData->exec_glUniform2f(startPositionUniform, xtransformed,ytransformed);
 	engineData->exec_glUniform2f(scaleUniform, xscale,yscale);
+	engineData->exec_glUniform4f(colortransMultiplyUniform, redMultiplier,greenMultiplier,blueMultiplier,alphaMultiplier);
+	engineData->exec_glUniform4f(colortransAddUniform, redOffset,greenOffset,blueOffset,alphaOffset);
 	//Set matrix
 	setMatrixUniform(LSGL_MODELVIEW);
 
@@ -344,7 +349,10 @@ void CairoRenderContext::transformedBlit(const MATRIX& m, uint8_t* sourceBuf, ui
 }
 
 void CairoRenderContext::renderTextured(const TextureChunk& chunk, int32_t x, int32_t y, uint32_t w, uint32_t h,
-			float alpha, COLOR_MODE colorMode, float rotate, int32_t xtransformed, int32_t ytransformed, int32_t widthtransformed, int32_t heighttransformed, float xscale, float yscale, bool isMask, bool hasMask)
+			float alpha, COLOR_MODE colorMode, float rotate, int32_t xtransformed, int32_t ytransformed, int32_t widthtransformed, int32_t heighttransformed, float xscale, float yscale,
+			float redMultiplier, float greenMultiplier, float blueMultiplier, float alphaMultiplier,
+			float redOffset, float greenOffset, float blueOffset, float alphaOffset,
+			bool isMask, bool hasMask)
 {
 	if (alpha != 1.0)
 		LOG(LOG_NOT_IMPLEMENTED,"CairoRenderContext.renderTextured alpha not implemented:"<<alpha);
@@ -356,15 +364,18 @@ void CairoRenderContext::renderTextured(const TextureChunk& chunk, int32_t x, in
 	cairo_surface_destroy(chunkSurface);
 	cairo_pattern_set_filter(chunkPattern, CAIRO_FILTER_BILINEAR);
 	cairo_pattern_set_extend(chunkPattern, CAIRO_EXTEND_NONE);
+	cairo_save(cr);
 	cairo_matrix_t matrix;
-	//TODO: Support scaling
-	cairo_matrix_init_translate(&matrix, -x, -y);
-	cairo_matrix_rotate(&matrix,rotate);
-	cairo_pattern_set_matrix(chunkPattern, &matrix);
+	cairo_matrix_init_translate(&matrix,xtransformed,ytransformed);
+	cairo_matrix_scale(&matrix, xscale, yscale);
+	cairo_matrix_rotate(&matrix,rotate*M_PI/180.0);
+	cairo_set_matrix(cr,&matrix);
+
 	cairo_set_source(cr, chunkPattern);
 	cairo_pattern_destroy(chunkPattern);
-	cairo_rectangle(cr, x, y, w, h);
+	cairo_rectangle(cr, 0, 0, w, h);
 	cairo_fill(cr);
+	cairo_restore(cr);
 }
 
 const CachedSurface& CairoRenderContext::getCachedSurface(const DisplayObject* d) const

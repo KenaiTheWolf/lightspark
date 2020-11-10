@@ -128,7 +128,10 @@ bool Video::renderImpl(RenderContext& ctxt) const
 		//Enable YUV to RGB conversion
 		//width and height will not change now (the Video mutex is acquired)
 		ctxt.renderTextured(netStream->getTexture(), 0, 0, width, height,
-			clippedAlpha(), RenderContext::YUV_MODE,totalMatrix.getRotation(),0,0,width,height,totalMatrix.getScaleX(),totalMatrix.getScaleY(),false,false);
+			clippedAlpha(), RenderContext::YUV_MODE,totalMatrix.getRotation(),0,0,width,height,totalMatrix.getScaleX(),totalMatrix.getScaleY(),
+			1.0f,1.0f,1.0f,1.0f,
+			0.0f,0.0f,0.0f,0.0f,
+			false,false);
 		
 		netStream->unlock();
 		return false;
@@ -530,18 +533,37 @@ void SoundChannel::appendStreamBlock(unsigned char *buf, int len)
 
 void SoundChannel::play(number_t starttime)
 {
+	mutex.lock();
 	if (!ACQUIRE_READ(stopped))
 	{
-		threadAbort();
+		RELEASE_WRITE(stopped,true);
+		if (stream)
+		{
+			if (audioStream)
+				startTime = audioStream->getPlayedTime();
+			stream->markFinished(false);
+		}
+		if(audioDecoder)
+		{
+			//Clear everything we have in buffers, discard all frames
+			audioDecoder->setFlushing();
+			audioDecoder->skipAll();
+			audioDecoder=nullptr;
+		}
 		restartafterabort=true;
 		startTime = starttime;
 	}
 	else
 	{
 		if (restartafterabort)
+		{
+			mutex.unlock();
 			return;
+		}
+		mutex.unlock();
 		while (!ACQUIRE_READ(terminated))
 			compat_msleep(10);
+		mutex.lock();
 		restartafterabort=false;
 		startTime = starttime;
 		if (!stream.isNull() && ACQUIRE_READ(stopped))
@@ -553,6 +575,7 @@ void SoundChannel::play(number_t starttime)
 			RELEASE_WRITE(terminated,false);
 		}
 	}
+	mutex.unlock();
 }
 void SoundChannel::resume()
 {
@@ -645,12 +668,13 @@ void SoundChannel::playStream()
 	bool waitForFlush=true;
 	StreamDecoder* streamDecoder=nullptr;
 	{
-		Locker l(mutex);
+		mutex.lock();
 		if (audioStream)
 		{
 			delete audioStream;
 			audioStream=nullptr;
 		}
+		mutex.unlock();
 	}
 	//We need to catch possible EOF and other error condition in the non reliable stream
 	try
@@ -720,10 +744,11 @@ void SoundChannel::playStream()
 	}
 
 	{
-		Locker l(mutex);
+		mutex.lock();
 		audioDecoder=nullptr;
 		delete audioStream;
 		audioStream=nullptr;
+		mutex.unlock();
 	}
 	delete streamDecoder;
 	delete sbuf;
@@ -738,8 +763,8 @@ void SoundChannel::playStream()
 
 void SoundChannel::jobFence()
 {
+	mutex.lock();
 	RELEASE_WRITE(terminated,true);
-	Locker l(mutex);
 	if (restartafterabort && !getSystemState()->isShuttingDown())
 	{
 		restartafterabort=false;
@@ -755,14 +780,18 @@ void SoundChannel::jobFence()
 	}
 	else
 		this->decRef();
+	mutex.unlock();
 }
 
 void SoundChannel::threadAbort()
 {
+	mutex.lock();
 	if (ACQUIRE_READ(stopped))
+	{
+		mutex.unlock();
 		return;
+	}
 	RELEASE_WRITE(stopped,true);
-	Locker l(mutex);
 	if (stream)
 	{
 		if (audioStream)
@@ -776,6 +805,7 @@ void SoundChannel::threadAbort()
 		audioDecoder->skipAll();
 		audioDecoder=nullptr;
 	}
+	mutex.unlock();
 }
 
 void StageVideo::sinit(Class_base *c)
