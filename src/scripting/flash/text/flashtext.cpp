@@ -116,10 +116,10 @@ ASFUNCTIONBODY_ATOM(ASFont,hasGlyphs)
 	LOG(LOG_NOT_IMPLEMENTED,"Font.hasGlyphs always returns true for not embedded fonts:"<<text<<" "<<th->fontName<<" "<<th->fontStyle<<" "<<th->fontType);
 	asAtomHandler::setBool(ret,true);
 }
-TextField::TextField(Class_base* c, const TextData& textData, bool _selectable, bool readOnly, const char *varname)
+TextField::TextField(Class_base* c, const TextData& textData, bool _selectable, bool readOnly, const char *varname, DefineEditTextTag *_tag)
 	: InteractiveObject(c), TextData(textData), TokenContainer(this, this->getSystemState()->textTokenMemory), type(ET_READ_ONLY),
 	  antiAliasType(AA_NORMAL), gridFitType(GF_PIXEL),
-	  textInteractionMode(TI_NORMAL),autosizeposition(0),tagvarname(varname),alwaysShowSelection(false),
+	  textInteractionMode(TI_NORMAL),autosizeposition(0),tagvarname(varname),tag(_tag),alwaysShowSelection(false),
 	  condenseWhite(false), displayAsPassword(false),
 	  embedFonts(false), maxChars(0), mouseWheelEnabled(true),
 	  selectable(_selectable), selectionBeginIndex(0), selectionEndIndex(0),
@@ -275,7 +275,7 @@ ASFUNCTIONBODY_ATOM(TextField,_setWordWrap)
 	ARG_UNPACK_ATOM(th->wordWrap);
 	th->setSizeAndPositionFromAutoSize();
 	th->hasChanged=true;
-	th->needsTextureRecalculation=true;
+	th->setNeedsTextureRecalculation();
 	if(th->onStage && th->isVisible())
 		th->requestInvalidation(th->getSystemState());
 }
@@ -323,7 +323,7 @@ ASFUNCTIONBODY_ATOM(TextField,_setAutoSize)
 		th->autoSize = newAutoSize;
 		th->setSizeAndPositionFromAutoSize();
 		th->hasChanged=true;
-		th->needsTextureRecalculation=true;
+		th->setNeedsTextureRecalculation();
 		if(th->onStage && th->isVisible())
 			th->requestInvalidation(th->getSystemState());
 	}
@@ -334,25 +334,27 @@ void TextField::setSizeAndPositionFromAutoSize()
 	if (autoSize == AS_NONE)
 		return;
 
+	switch (autoSize)
+	{
+		case AS_RIGHT:
+			autosizeposition = width-textWidth;
+			break;
+		case AS_CENTER:
+			autosizeposition = (width - textWidth)/2.0;
+			break;
+		default:
+			autosizeposition = 0;
+			break;
+	}
 	if (!wordWrap)
 	{
-		switch (autoSize)
-		{
-			case AS_RIGHT:
-				autosizeposition = width-textWidth;
-				break;
-			case AS_CENTER:
-				autosizeposition = (width - textWidth)/2.0;
-				break;
-			default:
-				autosizeposition = 0;
-				break;
-		}
 		if (width < textWidth)
 			width = textWidth;
 		if (height < textHeight)
 			height = textHeight;
 	}
+	else
+		height = textHeight;
 }
 
 ASFUNCTIONBODY_ATOM(TextField,_getWidth)
@@ -376,7 +378,7 @@ ASFUNCTIONBODY_ATOM(TextField,_setWidth)
 	{
 		th->width=asAtomHandler::toUInt(args[0]);
 		th->hasChanged=true;
-		th->needsTextureRecalculation=true;
+		th->setNeedsTextureRecalculation();
 		if(th->onStage && th->isVisible())
 			th->requestInvalidation(sys);
 		else
@@ -400,7 +402,7 @@ ASFUNCTIONBODY_ATOM(TextField,_setHeight)
 	{
 		th->height=asAtomHandler::toUInt(args[0]);
 		th->hasChanged=true;
-		th->needsTextureRecalculation=true;
+		th->setNeedsTextureRecalculation();
 		if(th->onStage && th->isVisible())
 			th->requestInvalidation(th->getSystemState());
 		else
@@ -462,7 +464,7 @@ ASFUNCTIONBODY_ATOM(TextField,_getTextFormat)
 
 	format->color= asAtomHandler::fromUInt(th->textColor.toUInt());
 	format->font = th->font;
-	format->size = th->fontSize;
+	format->size = asAtomHandler::fromUInt(th->fontSize);
 
 	LOG(LOG_NOT_IMPLEMENTED, "getTextFormat is not fully implemeted");
 
@@ -480,7 +482,11 @@ ASFUNCTIONBODY_ATOM(TextField,_setTextFormat)
 
 	if(beginIndex!=-1 || endIndex!=-1)
 		LOG(LOG_NOT_IMPLEMENTED,"setTextFormat with beginIndex or endIndex");
-
+	if (tf.isNull())
+	{
+		LOG(LOG_NOT_IMPLEMENTED,"setTextFormat with textformat null");
+		return;
+	}
 	if(!asAtomHandler::isNull(tf->color))
 		th->textColor = asAtomHandler::toUInt(tf->color);
 	bool updatesizes = false;
@@ -491,13 +497,18 @@ ASFUNCTIONBODY_ATOM(TextField,_setTextFormat)
 		th->font = tf->font;
 		th->fontID = UINT32_MAX;
 	}
-	if (th->fontSize != (uint32_t)tf->size)
+	if (!asAtomHandler::isNull(tf->size) && th->fontSize != asAtomHandler::toUInt(tf->size))
 	{
-		th->fontSize = tf->size;
+		th->fontSize = asAtomHandler::toUInt(tf->size);
 		updatesizes = true;
 	}
 	if (updatesizes)
+	{
 		th->updateSizes();
+		th->setSizeAndPositionFromAutoSize();
+		th->hasChanged=true;
+		th->setNeedsTextureRecalculation();
+	}
 
 	LOG(LOG_NOT_IMPLEMENTED,"setTextFormat does not read all fields of TextFormat");
 }
@@ -526,7 +537,8 @@ ASFUNCTIONBODY_ATOM(TextField,_setDefaultTextFormat)
 		th->font = tf->font;
 		th->fontID = UINT32_MAX;
 	}
-	th->fontSize = tf->size;
+	if (!asAtomHandler::isNull(tf->size))
+		th->fontSize = asAtomHandler::toUInt(tf->size);
 	LOG(LOG_NOT_IMPLEMENTED,"setDefaultTextFormat does not set all fields of TextFormat");
 }
 
@@ -872,7 +884,7 @@ void TextField::validateScrollH(int32_t oldValue)
 	if (scrollH > maxScrollH)
 		scrollH = maxScrollH;
 	hasChanged=true;
-	needsTextureRecalculation=true;
+	setNeedsTextureRecalculation();
 
 	if (onStage && (scrollH != oldValue) && isVisible())
 		requestInvalidation(this->getSystemState());
@@ -886,7 +898,7 @@ void TextField::validateScrollV(int32_t oldValue)
 	else if (scrollV > maxScrollV)
 		scrollV = maxScrollV;
 	hasChanged=true;
-	needsTextureRecalculation=true;
+	setNeedsTextureRecalculation();
 
 	if (onStage && (scrollV != oldValue) && isVisible())
 		requestInvalidation(this->getSystemState());
@@ -956,7 +968,8 @@ void TextField::updateSizes()
 	//width = w; //TODO: check the case when w,h == 0
 	textWidth=tw;
 	//height = h;
-	textHeight=th;
+	//textHeight=th;
+	textHeight=fontSize+(leading > 0 ? leading : -leading); // textheight seems to be independent of the text actually rendered
 }
 
 tiny_string TextField::toHtmlText()
@@ -1003,7 +1016,7 @@ void TextField::setHtmlText(const tiny_string& html)
 	}
 	updateSizes();
 	hasChanged=true;
-	needsTextureRecalculation=true;
+	setNeedsTextureRecalculation();
 	textUpdated();
 }
 
@@ -1148,10 +1161,15 @@ void TextField::tick()
 		return;
 	caretblinkstate = !caretblinkstate;
 	hasChanged=true;
-	needsTextureRecalculation=true;
+	setNeedsTextureRecalculation();
 	
 	if(onStage && isVisible())
 		requestInvalidation(this->getSystemState());
+}
+
+uint32_t TextField::getTagID() const
+{
+	return tag ? tag->getId() : UINT32_MAX;
 }
 
 void TextField::textUpdated()
@@ -1164,7 +1182,7 @@ void TextField::textUpdated()
 	updateSizes();
 	setSizeAndPositionFromAutoSize();
 	hasChanged=true;
-	needsTextureRecalculation=true;
+	setNeedsTextureRecalculation();
 
 	if(onStage && isVisible())
 		requestInvalidation(this->getSystemState());
@@ -1192,14 +1210,14 @@ void TextField::defaultEventBehavior(_R<Event> e)
 		uint32_t modifiers = ev->getModifiers() & (KMOD_LSHIFT | KMOD_RSHIFT |KMOD_LCTRL | KMOD_RCTRL | KMOD_LALT | KMOD_RALT);
 		if (modifiers == KMOD_NONE)
 		{
-			tiny_string newtext = this->text;
 			switch (ev->getKeyCode())
 			{
 				case AS3KEYCODE_BACKSPACE:
 					if (!this->text.empty() && caretIndex > 0)
 					{
 						caretIndex--;
-						newtext=this->text.replace(caretIndex,1,"");
+						this->text.replace(caretIndex,1,"");
+						textUpdated();
 					}
 					break;
 				case AS3KEYCODE_LEFT:
@@ -1213,7 +1231,6 @@ void TextField::defaultEventBehavior(_R<Event> e)
 				default:
 					break;
 			}
-			this->updateText(newtext);
 		}
 		else
 			LOG(LOG_NOT_IMPLEMENTED,"TextField keyDown event handling for modifier "<<modifiers<<" and char code "<<hex<<ev->getCharCode());
@@ -1285,7 +1302,7 @@ IDrawable* TextField::invalidate(DisplayObject* target, const MATRIX& initialMat
 			}
 			else
 			{
-				tw -= autosizeposition;
+				tw += autosizeposition;
 				tw /=scaling;
 			}
 			LINESTYLE2 linestyle(0xff);
@@ -1297,10 +1314,8 @@ IDrawable* TextField::invalidate(DisplayObject* target, const MATRIX& initialMat
 			tokens.stroketokens.emplace_back(_MR(new GeomToken(STRAIGHT, Vector2(tw, (bymax-bymin)/scaling-ypadding))));
 			tokens.stroketokens.emplace_back(_MR(new GeomToken(CLEAR_STROKE)));
 		}
-		uint32_t tokencount = tokens.size();
 		embeddedfont->fillTextTokens(tokens,text,fontSize,textColor,leading,autosizeposition);
-		if (tokencount < tokens.size())
-			return TokenContainer::invalidate(target, totalMatrix,smoothing);
+		return TokenContainer::invalidate(target, totalMatrix,smoothing);
 	}
 	std::vector<IDrawable::MaskData> masks;
 	bool isMask;
@@ -1312,8 +1327,11 @@ IDrawable* TextField::invalidate(DisplayObject* target, const MATRIX& initialMat
 	owner->computeMasksAndMatrix(target,masks,totalMatrix2,true,isMask,hasMask);
 	totalMatrix2=initialMatrix.multiplyMatrix(totalMatrix2);
 	computeBoundsForTransformedRect(bxmin,bxmax,bymin,bymax,rx,ry,rwidth,rheight,totalMatrix2);
-	if (text.empty())
-		return nullptr;
+	if (this->type != ET_EDITABLE)
+	{
+		if (text.empty())
+			return nullptr;
+	}
 	if(width==0 || height==0)
 		return nullptr;
 	if(totalMatrix.getScaleX() != 1 || totalMatrix.getScaleY() != 1)
@@ -1576,7 +1594,7 @@ bool TextFormat::destruct()
 	url="";
 	target="";
 	font="";
-	size=12;
+	size=asAtomHandler::nullAtom;
 	return destructIntern();
 }
 
@@ -1584,7 +1602,7 @@ ASFUNCTIONBODY_ATOM(TextFormat,_constructor)
 {
 	TextFormat* th=asAtomHandler::as<TextFormat>(obj);
 	ARG_UNPACK_ATOM (th->font, "")
-		(th->size, 12)
+		(th->size,asAtomHandler::nullAtom)
 		(th->color,asAtomHandler::nullAtom)
 		(th->bold,asAtomHandler::nullAtom)
 		(th->italic,asAtomHandler::nullAtom)
@@ -1727,6 +1745,8 @@ _NR<DisplayObject> StaticText::hitTestImpl(_NR<DisplayObject> last, number_t x, 
 	boundsRect(xmin,xmax,ymin,ymax);
 	if( xmin <= x && x <= xmax && ymin <= y && y <= ymax)
 	{
+		if (interactiveObjectsOnly)
+			return last;
 		incRef();
 		return _MNR(this);
 	}

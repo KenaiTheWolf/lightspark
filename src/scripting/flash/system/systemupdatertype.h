@@ -17,8 +17,8 @@
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
 **************************************************************************/
 
-#ifndef SCRIPTING_FLASH_SYSTEM_SYSTEMUPDATER_H
-#define SCRIPTING_FLASH_SYSTEM_SYSTEMUPDATER_H 1
+#ifndef SCRIPTING_FLASH_SYSTEM_SYSTEMUPDATERTYPE_H
+#define SCRIPTING_FLASH_SYSTEM_SYSTEMUPDATERTYPE_H 1
 
 #include "asobject.h"
 
@@ -33,4 +33,4 @@ public:
 };
 
 }
-#endif /* SCRIPTING_FLASH_SYSTEM_SYSTEMUPDATER_H */
+#endif /* SCRIPTING_FLASH_SYSTEM_SYSTEMUPDATERTYPE_H */

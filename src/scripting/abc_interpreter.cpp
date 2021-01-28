@@ -1191,12 +1191,13 @@ void skipjump(preloadstate& state,uint8_t& b,memorystream& code,uint32_t& pos,bo
 		if (!hastargets)
 		{
 			// skip unreachable code
-			pos = p+j; 
+			pos = p+j;
 			auto it = state.jumptargets.find(p+j+1);
 			if (it != state.jumptargets.end() && it->second > 1)
 				state.jumptargets[p+j+1]--;
 			else
 				state.jumptargets.erase(p+j+1);
+			state.oldnewpositions[p+j] = (int32_t)state.preloadedcode.size();
 			b = code.peekbyteFromPosition(pos);
 			if (jumpInCode)
 			{
@@ -1472,7 +1473,8 @@ bool checkForLocalResult(preloadstate& state,memorystream& code,uint32_t opcode_
 				b = code.peekbyteFromPosition(pos);
 				pos++;
 				argsneeded++;
-				if (b==0x80)//coerce
+				if (b==0x80 //coerce
+					&& (state.jumptargets.find(pos) == state.jumptargets.end()))
 				{
 					uint32_t t = code.peeku30FromPosition(pos);
 					multiname* name =  state.mi->context->getMultinameImpl(asAtomHandler::nullAtom,nullptr,t,false);
@@ -1792,6 +1794,7 @@ bool checkForLocalResult(preloadstate& state,memorystream& code,uint32_t opcode_
 		case 0x73://convert_i
 		case 0x74://convert_u
 		case 0x75://convert_d
+		case 0x76://convert_b
 		case 0xc0://increment_i
 		case 0xc1://decrement_i
 		case 0x35://li8
@@ -1949,9 +1952,9 @@ bool setupInstructionTwoArgumentsNoResult(preloadstate& state,int operator_start
 	}
 	return hasoperands;
 }
-bool setupInstructionOneArgument(preloadstate& state,int operator_start,int opcode,memorystream& code,bool constantsallowed, bool useargument_for_skip, Class_base* resulttype, uint32_t startcodepos, bool checkforlocalresult, bool addchanged=false,bool fromdup=false)
+bool setupInstructionOneArgument(preloadstate& state,int operator_start,int opcode,memorystream& code,bool constantsallowed, bool useargument_for_skip, Class_base* resulttype, uint32_t startcodepos, bool checkforlocalresult, bool addchanged=false,bool fromdup=false, bool checkoperands=true)
 {
-	bool hasoperands = state.jumptargets.find(startcodepos) == state.jumptargets.end() && state.operandlist.size() >= 1 && (constantsallowed || state.operandlist.back().type == OP_LOCAL|| state.operandlist.back().type == OP_CACHED_SLOT);
+	bool hasoperands = !checkoperands || (state.jumptargets.find(startcodepos) == state.jumptargets.end() && state.operandlist.size() >= 1 && (constantsallowed || state.operandlist.back().type == OP_LOCAL|| state.operandlist.back().type == OP_CACHED_SLOT));
 	Class_base* skiptype = resulttype;
 	if (hasoperands)
 	{
@@ -3144,13 +3147,83 @@ void ABCVm::preloadFunction(SyntheticFunction* function)
 					if (function->isStatic)
 					{
 						variable* v = function->inClass->findVariableByMultiname(*name,nullptr);
-						if (v && v->kind == TRAIT_KIND::CONSTANT_TRAIT)
+						if (v)
 						{
-							addCachedConstant(state,mi, v->var,code);
-							if (v->isResolved && dynamic_cast<const Class_base*>(v->type))
-								resulttype = (Class_base*)v->type;
-							typestack.push_back(typestackentry(resulttype,false));
-							break;
+							if (v->kind == TRAIT_KIND::CONSTANT_TRAIT)
+							{
+								addCachedConstant(state,mi, v->var,code);
+								if (v->isResolved && dynamic_cast<const Class_base*>(v->type))
+									resulttype = (Class_base*)v->type;
+								typestack.push_back(typestackentry(resulttype,false));
+								break;
+							}
+							else if (v->kind==DECLARED_TRAIT)
+							{
+								// property is static variable from class
+								resulttype = (Class_base*)(v->isResolved ? dynamic_cast<const Class_base*>(v->type):nullptr);
+								state.oldnewpositions[code.tellg()] = (int32_t)state.preloadedcode.size();
+								asAtom clAtom = asAtomHandler::fromObjectNoPrimitive(function->inClass);
+								addCachedConstant(state,state.mi,clAtom,code);
+								// convert to getprop on class
+								setupInstructionOneArgument(state,ABC_OP_OPTIMZED_GETPROPERTY_STATICNAME,0x66,code,true, false,resulttype,p,true,false,false,false);
+								state.preloadedcode.at(state.preloadedcode.size()-1).pcode.cachedmultiname2 = name;
+								typestack.push_back(typestackentry(resulttype,false));
+								break;
+							}
+						}
+					}
+					else
+					{
+						bool isborrowed = false;
+						variable* v = nullptr;
+						Class_base* cls = function->inClass;
+						do
+						{
+							v = cls->findVariableByMultiname(*name,cls,nullptr,&isborrowed);
+							if (!v)
+								cls = cls->super.getPtr();
+						}
+						while (!v && cls && cls->isSealed);
+						if (v && asAtomHandler::isValid(v->setter) && cls->is<Class_inherit>() && cls->as<Class_inherit>()->hasoverriddenmethod(name))
+							v=nullptr;
+						if (v)
+						{
+							if ((isborrowed || v->kind == INSTANCE_TRAIT) && asAtomHandler::isValid(v->getter))
+							{
+								// property is getter from class
+								resulttype = (Class_base*)(v->isResolved ? dynamic_cast<const Class_base*>(v->type):nullptr);
+								state.preloadedcode.push_back((uint32_t)0xd0);
+								state.oldnewpositions[code.tellg()] = (int32_t)state.preloadedcode.size();
+								state.operandlist.push_back(operands(OP_LOCAL,function->inClass, 0,1,state.preloadedcode.size()-1));
+								if (function->inClass->isInterfaceMethod(*name) ||
+									(function->inClass->is<Class_inherit>() && function->inClass->as<Class_inherit>()->hasoverriddenmethod(name)))
+								{
+									// convert to getprop on local[0]
+									setupInstructionOneArgument(state,ABC_OP_OPTIMZED_GETPROPERTY_STATICNAME,0x66,code,true, false,resulttype,p,true,false,false,false);
+									state.preloadedcode.at(state.preloadedcode.size()-1).pcode.cachedmultiname2 = name;
+								}
+								else
+								{
+									// convert to callprop on local[0] (this) with 0 args
+									setupInstructionOneArgument(state,ABC_OP_OPTIMZED_CALLFUNCTION_NOARGS,0x46,code,true, false,resulttype,p,true,false,false,false);
+									state.preloadedcode.at(state.preloadedcode.size()-1).pcode.cacheobj2 = asAtomHandler::getObject(v->getter);
+								}
+								typestack.push_back(typestackentry(resulttype,false));
+								break;
+							}
+							else if (!isborrowed && v->kind==DECLARED_TRAIT)
+							{
+								// property is static variable from class
+								resulttype = (Class_base*)(v->isResolved ? dynamic_cast<const Class_base*>(v->type):nullptr);
+								state.oldnewpositions[code.tellg()] = (int32_t)state.preloadedcode.size();
+								asAtom clAtom = asAtomHandler::fromObjectNoPrimitive(cls);
+								addCachedConstant(state,state.mi,clAtom,code);
+								// convert to getprop on class
+								setupInstructionOneArgument(state,ABC_OP_OPTIMZED_GETPROPERTY_STATICNAME,0x66,code,true, false,resulttype,p,true,false,false,false);
+								state.preloadedcode.at(state.preloadedcode.size()-1).pcode.cachedmultiname2 = name;
+								typestack.push_back(typestackentry(resulttype,false));
+								break;
+							}
 						}
 					}
 					if ((simple_getter_opcode_pos != UINT32_MAX) // function is simple getter
@@ -3183,6 +3256,11 @@ void ABCVm::preloadFunction(SyntheticFunction* function)
 					{
 						GET_VARIABLE_OPTION opt= (GET_VARIABLE_OPTION)(FROM_GETLEX | DONT_CALL_GETTER | NO_INCREF);
 						mi->context->root->applicationDomain->getVariableByMultiname(o,*name,opt);
+					}
+					if(asAtomHandler::isInvalid(o))
+					{
+						ASObject* target = nullptr;
+						r = mi->context->root->applicationDomain->getVariableAndTargetByMultiname(o,*name,target);
 					}
 					if (asAtomHandler::is<Template_base>(o))
 					{
@@ -3909,7 +3987,11 @@ void ABCVm::preloadFunction(SyntheticFunction* function)
 					// skip complete jump
 					for (int32_t i = 0; i < j; i++)
 						code.readbyte();
-					state.jumptargets.erase(code.tellg()+1);
+					auto it = state.jumptargets.find(p+j+1);
+					if (it != state.jumptargets.end() && it->second > 1)
+						state.jumptargets[p+j+1]--;
+					else
+						state.jumptargets.erase(p+j+1);
 					state.oldnewpositions[code.tellg()] = (int32_t)state.preloadedcode.size();
 					opcode_skipped=true;
 				}
@@ -4441,7 +4523,7 @@ void ABCVm::preloadFunction(SyntheticFunction* function)
 						coercereturnvalue = true;
 					}
 				}
-				if (checkresulttype)
+				if (checkresulttype && dynamic_cast<const Class_base*>(mi->returnType) == Class<Integer>::getRef(state.mi->context->root->getSystemState()).getPtr())
 				{
 					if (!typestack.back().obj
 							|| !typestack.back().obj->is<Class_base>() 
@@ -4660,6 +4742,7 @@ void ABCVm::preloadFunction(SyntheticFunction* function)
 									break;
 								case 1:
 								{
+									bool isIntGenerator=false;
 									if (typestack.size() > 1 &&
 											typestack[typestack.size()-2].obj != nullptr &&
 											(typestack[typestack.size()-2].obj->is<Global>() ||
@@ -4671,24 +4754,10 @@ void ABCVm::preloadFunction(SyntheticFunction* function)
 										{
 											// function is a class generator, we can use it as the result type
 											resulttype = asAtomHandler::as<Class_base>(func);
-
-											// generator for Integer can be skipped if argument is already an integer
 											if (state.operandlist.size() > 2 && resulttype == Class<Integer>::getRef(function->getSystemState()).getPtr()
 													&& typestack.size() > 0 && typestack.back().obj == Class<Integer>::getRef(mi->context->root->getSystemState()).getPtr())
 											{
-												// remove caller
-												auto it = state.operandlist.end();
-												--it;
-												--it;
-												uint32_t c  = it->codecount;
-												it->removeArg(state);
-												state.operandlist.erase(it);
-												state.operandlist.back().preloadedcodepos-=c;
-
-												state.oldnewpositions[code.tellg()] = (int32_t)state.preloadedcode.size();
-												removetypestack(typestack,2);
-												typestack.push_back(typestackentry(resulttype,false));
-												break;
+												isIntGenerator=true;
 											}
 										}
 										else if (asAtomHandler::is<SyntheticFunction>(func))
@@ -4737,6 +4806,14 @@ void ABCVm::preloadFunction(SyntheticFunction* function)
 									if ((opcode == 0x4f && setupInstructionTwoArgumentsNoResult(state,ABC_OP_OPTIMZED_CALLPROPVOID_STATICNAME,opcode,code)) ||
 									   ((opcode == 0x46 && setupInstructionTwoArguments(state,ABC_OP_OPTIMZED_CALLPROPERTY_STATICNAME,opcode,code,false,false,true,p,resulttype))))
 									{
+										// generator for Integer can be skipped if argument is already an integer and the result will be used as local result
+										if (state.operandlist.size()>1 && isIntGenerator)
+										{
+											// remove caller
+											state.preloadedcode.pop_back();
+											state.oldnewpositions[code.tellg()] = (int32_t)state.preloadedcode.size();
+											break;
+										}
 										state.preloadedcode.push_back(0);
 										state.preloadedcode.at(state.preloadedcode.size()-1).pcode.cachedmultiname2 = name;
 										state.preloadedcode.push_back(0);

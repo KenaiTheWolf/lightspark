@@ -89,6 +89,7 @@ public:
 	virtual ASObject* instance(Class_base* c=nullptr) { return nullptr; }
 	virtual MATRIX MapToBounds(const MATRIX& mat) { return mat; }
 	virtual MATRIX MapToBoundsForButton(const MATRIX& mat) { return MapToBounds(mat); }
+	virtual void resizeCompleted() {}
 };
 
 /*
@@ -136,15 +137,18 @@ public:
 	TAGTYPE getType() const override { return AVM1INITACTION_TAG; }
 	void execute(RootMovieClip* root) const override;
 	bool empty() { return actions.empty(); }
+	void executeDirect(MovieClip *clip) const;
 };
 
 class DefineShapeTag: public DictionaryTag
 {
+friend class Shape;
 protected:
 	UI16_SWF ShapeId;
 	RECT ShapeBounds;
 	SHAPEWITHSTYLE Shapes;
 	tokensVector* tokens;
+	TextureChunk chunk;
 	DefineShapeTag(RECORDHEADER h,int v,RootMovieClip* root);
 public:
 	DefineShapeTag(RECORDHEADER h,std::istream& in, RootMovieClip* root);
@@ -152,6 +156,7 @@ public:
 	virtual int getId() const{ return ShapeId; }
 	ASObject* instance(Class_base* c=nullptr);
 	MATRIX MapToBoundsForButton(const MATRIX& mat) override;
+	void resizeCompleted() override;
 };
 
 class DefineShape2Tag: public DefineShapeTag
@@ -700,7 +705,7 @@ public:
 	std::vector<u32> FrameNum;
 	std::vector<STRING> FrameLabel;
 	DefineSceneAndFrameLabelDataTag(RECORDHEADER h, std::istream& in);
-	void execute(RootMovieClip* root) const;
+	void execute(RootMovieClip* root) const override;
 };
 
 class DefineFontNameTag: public Tag
@@ -717,6 +722,7 @@ public:
 
 class DefineVideoStreamTag: public DictionaryTag
 {
+friend class Video;
 private:
 	UI16_SWF CharacterID;
 	UI16_SWF NumFrames;
@@ -725,13 +731,23 @@ private:
 	UB VideoFlagsReserved;
 	UB VideoFlagsDeblocking;
 	UB VideoFlagsSmoothing;
-	UI8 CodecID;
+	UI8 VideoCodecID;
 public:
 	DefineVideoStreamTag(RECORDHEADER h, std::istream& in, RootMovieClip* root);
-	int getId() const{ return CharacterID; }
-	ASObject* instance(Class_base* c=NULL);
+	int getId() const override { return CharacterID; }
+	ASObject* instance(Class_base* c=nullptr) override;
 };
-
+class VideoFrameTag: public DisplayListTag
+{
+private:
+	UI16_SWF StreamID;
+	UI16_SWF FrameNum;
+	uint8_t* framedata;
+	uint32_t numbytes;
+public:
+	VideoFrameTag(RECORDHEADER h, std::istream& in);
+	void execute(DisplayObjectContainer* parent,bool inskipping) override;
+};
 class MetadataTag: public Tag
 {
 private:

@@ -46,6 +46,7 @@
 #include "scripting/avm1/avm1text.h"
 #include "scripting/flash/filters/flashfilters.h"
 #include "backends/audio.h"
+#include "backends/rendering.h"
 
 #undef RGB
 
@@ -222,6 +223,9 @@ Tag* TagFactory::readTag(RootMovieClip* root, DefineSpriteTag *sprite)
 				break;
 			case 60:
 				ret=new DefineVideoStreamTag(h,f,root);
+				break;
+			case 61:
+				ret=new VideoFrameTag(h,f);
 				break;
 			case 63:
 				ret=new DebugIDTag(h,f);
@@ -444,8 +448,8 @@ ASObject* DefineEditTextTag::instance(Class_base* c)
 	//TODO: check
 	assert_and_throw(bindedTo==NULL);
 	TextField* ret= loadedFrom->usesActionScript3 ? 
-					new (c->memoryAccount) TextField(c, textData, !NoSelect, ReadOnly,VariableName) :
-					new (c->memoryAccount) AVM1TextField(c, textData, !NoSelect, ReadOnly,VariableName);
+					new (c->memoryAccount) TextField(c, textData, !NoSelect, ReadOnly,VariableName,this) :
+					new (c->memoryAccount) AVM1TextField(c, textData, !NoSelect, ReadOnly,VariableName,this);
 	if (HTML)
 		ret->setHtmlText((const char*)InitialText);
 	return ret;
@@ -564,6 +568,8 @@ ASObject* DefineSpriteTag::instance(Class_base* c)
 				new (retClass->memoryAccount) MovieClip(retClass, *this, this->getId());
 	if (soundheadtag)
 		soundheadtag->setSoundChannel(spr,false);
+	spr->loadedFrom=this->loadedFrom;
+	spr->loadedFrom->AVM1checkInitActions(spr);
 	return spr;
 }
 
@@ -1177,11 +1183,23 @@ ASObject* BitmapTag::instance(Class_base* c)
 	if(!realClass)
 		return new (classRet->memoryAccount) BitmapData(classRet, bitmap);
 
-	if(realClass->isSubClass(Class<Bitmap>::getClass(realClass->getSystemState())))
+	if (loadedFrom->usesActionScript3)
 	{
-		BitmapData* ret=new (classRet->memoryAccount) BitmapData(classRet, bitmap);
-		Bitmap* bitmapRet=new (realClass->memoryAccount) Bitmap(realClass,_MR(ret));
-		return bitmapRet;
+		if(realClass->isSubClass(Class<Bitmap>::getClass(realClass->getSystemState())))
+		{
+			BitmapData* ret=new (classRet->memoryAccount) BitmapData(classRet, bitmap);
+			Bitmap* bitmapRet= new (realClass->memoryAccount) Bitmap(realClass,_MR(ret));
+			return bitmapRet;
+		}
+	}
+	else
+	{
+		if(realClass->isSubClass(Class<AVM1Bitmap>::getClass(realClass->getSystemState())))
+		{
+			BitmapData* ret=new (classRet->memoryAccount) BitmapData(classRet, bitmap);
+			Bitmap* bitmapRet= new (realClass->memoryAccount) AVM1Bitmap(realClass,_MR(ret));
+			return bitmapRet;
+		}
 	}
 
 	if(realClass->isSubClass(Class<BitmapData>::getClass(realClass->getSystemState())))
@@ -1223,7 +1241,7 @@ ASObject* DefineTextTag::instance(Class_base* c)
 	if(c==nullptr)
 		c=Class<StaticText>::getClass(loadedFrom->getSystemState());
 
-	StaticText* ret=new (c->memoryAccount) StaticText(c, tokens,TextBounds);
+	StaticText* ret=new (c->memoryAccount) StaticText(c, tokens,TextBounds,this->getId());
 	return ret;
 }
 
@@ -1318,13 +1336,6 @@ DefineShapeTag::~DefineShapeTag()
 
 ASObject *DefineShapeTag::instance(Class_base *c)
 {
-	if(c==nullptr)
-	{
-		if (!loadedFrom->usesActionScript3)
-			c=Class<AVM1Shape>::getClass(loadedFrom->getSystemState());
-		else
-			c=Class<Shape>::getClass(loadedFrom->getSystemState());
-	}
 	if (!tokens)
 	{
 		tokens = new tokensVector(loadedFrom->getSystemState()->tagsMemory);
@@ -1334,15 +1345,31 @@ ASObject *DefineShapeTag::instance(Class_base *c)
 		}
 		TokenContainer::FromShaperecordListToShapeVector(Shapes.ShapeRecords,*tokens,Shapes.FillStyles.FillStyles,MATRIX(),Shapes.LineStyles.LineStyles2,ShapeBounds);
 	}
-	Shape* ret= loadedFrom->usesActionScript3 ?
-				new (c->memoryAccount) Shape(c, *tokens, 1.0f/20.0f,ShapeId,ShapeBounds):
-				new (c->memoryAccount) AVM1Shape(c, *tokens, 1.0f/20.0f,ShapeId,ShapeBounds);
+	Shape* ret=nullptr;
+	if(c==nullptr)
+	{
+		ret= loadedFrom->usesActionScript3 ?
+					Class<Shape>::getInstanceSNoArgs(loadedFrom->getSystemState()):
+					Class<AVM1Shape>::getInstanceSNoArgs(loadedFrom->getSystemState());
+	}
+	else
+	{
+		ret= loadedFrom->usesActionScript3 ?
+					 new (c->memoryAccount) Shape(c):
+					new (c->memoryAccount) AVM1Shape(c);
+	}
+	ret->setupShape(this, 1.0f/20.0f);
 	return ret;
 }
 MATRIX DefineShapeTag::MapToBoundsForButton(const MATRIX &mat)
 {
 	MATRIX m (1,1,0,0,ShapeBounds.Xmin/20,ShapeBounds.Ymin/20);
 	return mat.multiplyMatrix(m);
+}
+
+void DefineShapeTag::resizeCompleted()
+{
+	this->chunk.makeEmpty();
 }
 
 DefineShape2Tag::DefineShape2Tag(RECORDHEADER h, std::istream& in,RootMovieClip* root):DefineShapeTag(h,2,root)
@@ -1515,7 +1542,7 @@ void PlaceObject2Tag::setProperties(DisplayObject* obj, DisplayObjectContainer* 
 	assert_and_throw(obj && PlaceFlagHasCharacter);
 
 	//TODO: move these three attributes in PlaceInfo
-	if(PlaceFlagHasColorTransform && ColorTransformWithAlpha.isfilled())
+	if(PlaceFlagHasColorTransform)
 	{
 		obj->colorTransform=_NR<ColorTransform>(Class<ColorTransform>::getInstanceS(obj->getSystemState(),this->ColorTransformWithAlpha));
 	}
@@ -1554,15 +1581,15 @@ void PlaceObject2Tag::execute(DisplayObjectContainer* parent, bool inskipping)
 	bool exists = parent->hasLegacyChildAt(LEGACY_DEPTH_START+Depth);
 	uint32_t nameID = 0;
 	DisplayObject* currchar=nullptr;
-	if (parent->LegacyChildRemoveDeletionMark(LEGACY_DEPTH_START+Depth))
-	{
-		parent->deleteLegacyChildAt(LEGACY_DEPTH_START+Depth);
-		exists = false;
-	}
 	if (exists)
 	{
 		currchar = parent->getLegacyChildAt(LEGACY_DEPTH_START+Depth);
 		nameID = currchar->name;
+		if (parent->LegacyChildRemoveDeletionMark(LEGACY_DEPTH_START+Depth) && currchar->getTagID() != CharacterId)
+		{
+			parent->deleteLegacyChildAt(LEGACY_DEPTH_START+Depth);
+			exists = false;
+		}
 	}
 	bool newInstance = false;
 	if(PlaceFlagHasCharacter && (!exists || (currchar->getTagID() != CharacterId)))
@@ -1588,7 +1615,7 @@ void PlaceObject2Tag::execute(DisplayObjectContainer* parent, bool inskipping)
 		DisplayObject *toAdd = nullptr;
 		if(PlaceFlagHasName)
 		{
-			// check if an obect with this name was already created and removed earlier
+			// check if an object with this name was already created and removed earlier
 			nameID = NameID;
 			toAdd = parent->findRemovedLegacyChild(nameID);
 			if (toAdd && toAdd->getTagID() != CharacterId)
@@ -1603,7 +1630,9 @@ void PlaceObject2Tag::execute(DisplayObjectContainer* parent, bool inskipping)
 			if (!placedTag->bindedTo)
 				instance->setIsInitialized();
 			if (instance->is<BitmapData>())
-				toAdd =Class<Bitmap>::getInstanceS(instance->getSystemState(),_R<BitmapData>(instance->as<BitmapData>()));
+				toAdd = parent->loadedFrom->usesActionScript3 ?
+							Class<Bitmap>::getInstanceS(instance->getSystemState(),_R<BitmapData>(instance->as<BitmapData>())) :
+							Class<AVM1Bitmap>::getInstanceS(instance->getSystemState(),_R<BitmapData>(instance->as<BitmapData>()));
 			else
 				toAdd=dynamic_cast<DisplayObject*>(instance);
 			if(!toAdd && instance)
@@ -1624,6 +1653,7 @@ void PlaceObject2Tag::execute(DisplayObjectContainer* parent, bool inskipping)
 		//The matrix must be set before invoking the constructor
 		toAdd->setLegacyMatrix(placedTag->MapToBounds(Matrix));
 		toAdd->legacy = true;
+		toAdd->loadedFrom=placedTag->loadedFrom;
 
 		setProperties(toAdd, parent);
 
@@ -1666,7 +1696,7 @@ void PlaceObject2Tag::execute(DisplayObjectContainer* parent, bool inskipping)
 			parent->transformLegacyChildAt(LEGACY_DEPTH_START+Depth,Matrix);
 		}
 	}
-	if (!inskipping && exists && (currchar->getTagID() == CharacterId) && nameID) // reuse name of existing DispayObject at this depth
+	if (exists && (currchar->getTagID() == CharacterId) && nameID) // reuse name of existing DispayObject at this depth
 	{
 		currchar->name = nameID;
 		currchar->incRef();
@@ -1962,7 +1992,7 @@ DefineButtonTag::DefineButtonTag(RECORDHEADER h, std::istream& in, int version, 
 	
 	int realactionoffset = (((int)in.tellg())-pos);
 	len -= realactionoffset;
-	int datatagskipbytes = Header.getHeaderSize()+realactionoffset + 2 + (version > 1 ? 3 : 0);
+	int datatagskipbytes = Header.getHeaderSize()+realactionoffset + 2 + (version > 1 ? 1 : 0);
 	if (root->usesActionScript3)
 	{
 		// ignore actions when using ActionScript3
@@ -2055,8 +2085,7 @@ ASObject* DefineButtonTag::instance(Class_base* c)
 				state->setBlendMode(i->BlendMode);
 			if (i->ButtonHasFilterList && i->FilterList.Filters.size() != 0)
 				LOG(LOG_NOT_IMPLEMENTED,"DefineButtonTag: FilterList "<<this->getId());
-			if (i->ColorTransform.isfilled())
-				state->colorTransform=_NR<ColorTransform>(Class<ColorTransform>::getInstanceS(state->getSystemState(),i->ColorTransform));
+			state->colorTransform=_NR<ColorTransform>(Class<ColorTransform>::getInstanceS(state->getSystemState(),i->ColorTransform));
 
 			if(states[j] == nullptr)
 			{
@@ -2095,13 +2124,12 @@ ASObject* DefineButtonTag::instance(Class_base* c)
 
 DefineVideoStreamTag::DefineVideoStreamTag(RECORDHEADER h, std::istream& in, RootMovieClip* root):DictionaryTag(h, root)
 {
-	LOG(LOG_INFO,"DefineVideoStreamTag");
 	in >> CharacterID >> NumFrames >> Width >> Height;
 	BitStream bs(in);
 	UB(4,bs);
 	VideoFlagsDeblocking=UB(3,bs);
 	VideoFlagsSmoothing=UB(1,bs);
-	in >> CodecID;
+	in >> VideoCodecID;;
 }
 
 ASObject* DefineVideoStreamTag::instance(Class_base* c)
@@ -2117,9 +2145,9 @@ ASObject* DefineVideoStreamTag::instance(Class_base* c)
 		classRet=Class<Video>::getClass(loadedFrom->getSystemState());
 
 	if (!loadedFrom->usesActionScript3)
-		return new (classRet->memoryAccount) AVM1Video(classRet, Width, Height);
+		return new (classRet->memoryAccount) AVM1Video(classRet, Width, Height,this);
 	else
-		return new (classRet->memoryAccount) Video(classRet, Width, Height);
+		return new (classRet->memoryAccount) Video(classRet, Width, Height,this);
 }
 
 DefineBinaryDataTag::DefineBinaryDataTag(RECORDHEADER h,std::istream& s,RootMovieClip* root):DictionaryTag(h,root)
@@ -2282,7 +2310,7 @@ void StartSoundTag::execute(DisplayObjectContainer *parent, bool inskipping)
 	if (inskipping) // it seems that StartSoundTags are not executed if we are skipping the frame due to a gotoframe action
 		return;
 	DefineSoundTag *soundTag = \
-		dynamic_cast<DefineSoundTag *>(parent->getSystemState()->mainClip->dictionaryLookup(SoundId));
+		dynamic_cast<DefineSoundTag *>(parent->loadedFrom->dictionaryLookup(SoundId));
 
 	if (!soundTag)
 		return;
@@ -2595,7 +2623,7 @@ void SoundStreamHeadTag::setSoundChannel(Sprite *spr,bool autoplay)
 	SoundChannel *schannel = Class<SoundChannel>::getInstanceS(spr->getSystemState(),
 								SoundData,
 								AudioFormat(LS_AUDIO_CODEC(StreamSoundCompression),StreamSoundRate,StreamSoundType+1),autoplay);
-	spr->setSound(schannel);
+	spr->setSound(schannel,true);
 }
 
 
@@ -2677,6 +2705,7 @@ AVM1InitActionTag::AVM1InitActionTag(RECORDHEADER h, istream &s, RootMovieClip *
 	}
 	s >> SpriteId;
 	s.read((char*)actions.data()+startactionpos,Header.getLength()-2);
+	root->AVM1registerInitActionTag(SpriteId,this);
 }
 
 void AVM1InitActionTag::execute(RootMovieClip *root) const
@@ -2689,7 +2718,22 @@ void AVM1InitActionTag::execute(RootMovieClip *root) const
 		return;
 	}
 	MovieClip* o = sprite->instance(nullptr)->as<MovieClip>();
-	getVm(root->getSystemState())->addEvent(NullRef,_MR(new (root->getSystemState()->unaccountedMemory) AVM1InitActionEvent(sprite,actions,startactionpos,_MR(o))));
+	getVm(root->getSystemState())->addEvent(NullRef,_MR(new (root->getSystemState()->unaccountedMemory) AVM1InitActionEvent(root,_MR(o))));
+}
+
+void AVM1InitActionTag::executeDirect(MovieClip* clip) const
+{
+	DefineSpriteTag* sprite = dynamic_cast<DefineSpriteTag*>(clip->loadedFrom->dictionaryLookup(SpriteId));
+	if (!sprite)
+	{
+		LOG(LOG_ERROR,"sprite not found for InitActionTag:"<<SpriteId);
+		return;
+	}
+	clip->incRef();
+	std::map<uint32_t,asAtom> m;
+	LOG_CALL("AVM1:"<<clip->getTagID()<<" "<<clip->state.FP<<" initActions "<< clip->toDebugString()<<" "<<sprite->getId());
+	ACTIONRECORD::executeActions(clip,sprite->getAVM1Context(),actions,startactionpos,m);
+	LOG_CALL("AVM1:"<<clip->getTagID()<<" "<<clip->state.FP<<" initActions done "<< clip->toDebugString()<<" "<<sprite->getId());
 }
 
 AdditionalDataTag::AdditionalDataTag(RECORDHEADER h, istream &in):Tag(h)
@@ -2700,4 +2744,25 @@ AdditionalDataTag::AdditionalDataTag(RECORDHEADER h, istream &in):Tag(h)
 		bytes = new uint8_t[numbytes];
 		in.read((char*)bytes,numbytes);
 	}
+}
+VideoFrameTag::VideoFrameTag(RECORDHEADER h, istream &in):DisplayListTag(h)
+{
+	in >> StreamID >> FrameNum;
+	numbytes = h.getLength()-4;
+	if (numbytes)
+	{
+		framedata = new uint8_t[numbytes];
+		in.read((char*)framedata,numbytes);
+	}
+}
+
+void VideoFrameTag::execute(DisplayObjectContainer *parent, bool inskipping)
+{
+	if (inskipping)
+		return;
+	DisplayObject* d = parent->findLegacyChildByTagID(StreamID);
+	if (d && d->is<Video>())
+		d->as<Video>()->setVideoFrame(FrameNum,framedata,numbytes);
+	else
+		LOG(LOG_ERROR,"VideoFrameTag: no corresponding video found "<<StreamID);
 }

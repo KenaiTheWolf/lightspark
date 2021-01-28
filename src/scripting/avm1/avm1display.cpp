@@ -101,12 +101,18 @@ void AVM1SimpleButton::sinit(Class_base* c)
 
 void AVM1Stage::sinit(Class_base* c)
 {
-	Stage::sinit(c);
-	DisplayObject::AVM1SetupMethods(c);
+	// in AVM1 Stage is no DisplayObject and all methods/properties are static
+	CLASS_SETUP_NO_CONSTRUCTOR(c, ASObject, CLASS_SEALED);
 	c->setDeclaredMethodByQName("width","",Class<IFunction>::getFunction(c->getSystemState(),_getStageWidth),GETTER_METHOD,false);
 	c->setDeclaredMethodByQName("height","",Class<IFunction>::getFunction(c->getSystemState(),_getStageHeight),GETTER_METHOD,false);
 	c->setDeclaredMethodByQName("displayState","",Class<IFunction>::getFunction(c->getSystemState(),_getDisplayState),GETTER_METHOD,false);
 	c->setDeclaredMethodByQName("displayState","",Class<IFunction>::getFunction(c->getSystemState(),_setDisplayState),SETTER_METHOD,false);
+	c->setDeclaredMethodByQName("scaleMode","",Class<IFunction>::getFunction(c->getSystemState(),_getScaleMode),GETTER_METHOD,false);
+	c->setDeclaredMethodByQName("scaleMode","",Class<IFunction>::getFunction(c->getSystemState(),_setScaleMode),SETTER_METHOD,false);
+	c->setDeclaredMethodByQName("align","",Class<IFunction>::getFunction(c->getSystemState(),getAlign),GETTER_METHOD,false);
+	c->setDeclaredMethodByQName("align","",Class<IFunction>::getFunction(c->getSystemState(),setAlign),SETTER_METHOD,false);
+	c->setDeclaredMethodByQName("addListener","",Class<IFunction>::getFunction(c->getSystemState(),addResizeListener),NORMAL_METHOD,false);
+	c->setDeclaredMethodByQName("removeListener","",Class<IFunction>::getFunction(c->getSystemState(),removeResizeListener),NORMAL_METHOD,false);
 }
 ASFUNCTIONBODY_ATOM(AVM1Stage,_getDisplayState)
 {
@@ -116,6 +122,28 @@ ASFUNCTIONBODY_ATOM(AVM1Stage,_setDisplayState)
 {
 	ARG_UNPACK_ATOM(sys->stage->displayState);
 	sys->stage->onDisplayState(sys->stage->displayState);
+}
+ASFUNCTIONBODY_ATOM(AVM1Stage,getAlign)
+{
+	ret = asAtomHandler::fromString(sys,sys->stage->align);
+}
+ASFUNCTIONBODY_ATOM(AVM1Stage,setAlign)
+{
+	tiny_string oldalign=sys->stage->align;
+	ARG_UNPACK_ATOM(sys->stage->align);
+	sys->stage->onAlign(oldalign);
+}
+ASFUNCTIONBODY_ATOM(AVM1Stage,addResizeListener)
+{
+	_NR<ASObject> listener;
+	ARG_UNPACK_ATOM(listener,NullRef);
+	sys->stage->AVM1AddResizeListener(listener.getPtr());
+}
+ASFUNCTIONBODY_ATOM(AVM1Stage,removeResizeListener)
+{
+	_NR<ASObject> listener;
+	ARG_UNPACK_ATOM(listener,NullRef);
+	ret = asAtomHandler::fromBool(sys->stage->AVM1RemoveResizeListener(listener.getPtr()));
 }
 
 
@@ -460,3 +488,131 @@ bool AVM1Color::destruct()
 	return ASObject::destruct();
 }
 
+void AVM1Broadcaster::sinit(Class_base* c)
+{
+	CLASS_SETUP_NO_CONSTRUCTOR(c, ASObject, CLASS_FINAL);
+	c->isReusable = true;
+	c->setDeclaredMethodByQName("initialize","",Class<IFunction>::getFunction(c->getSystemState(),initialize),NORMAL_METHOD,false);
+}
+ASFUNCTIONBODY_ATOM(AVM1Broadcaster,initialize)
+{
+	_NR<ASObject> listener;
+	ARG_UNPACK_ATOM(listener);
+	if (!listener.isNull())
+	{
+		Array* listeners = Class<Array>::getInstanceSNoArgs(sys);
+		listener->setVariableAtomByQName("broadcastMessage",nsNameAndKind(),asAtomHandler::fromObjectNoPrimitive(Class<IFunction>::getFunction(sys,broadcastMessage)),DYNAMIC_TRAIT);
+		listener->setVariableAtomByQName("addListener",nsNameAndKind(),asAtomHandler::fromObjectNoPrimitive(Class<IFunction>::getFunction(sys,addListener)),DYNAMIC_TRAIT);
+		listener->setVariableAtomByQName("removeListener",nsNameAndKind(),asAtomHandler::fromObjectNoPrimitive(Class<IFunction>::getFunction(sys,removeListener)),DYNAMIC_TRAIT);
+		listener->setVariableAtomByQName("_listeners",nsNameAndKind(),asAtomHandler::fromObjectNoPrimitive(listeners),DYNAMIC_TRAIT);
+		LOG(LOG_ERROR,"AVM1Broadcaster.initialize:"<<listener->toDebugString());
+		listener->dumpVariables();
+	}
+}
+ASFUNCTIONBODY_ATOM(AVM1Broadcaster,broadcastMessage)
+{
+	ASObject* th = asAtomHandler::getObject(obj);
+	tiny_string msg;
+	ARG_UNPACK_ATOM(msg);
+	LOG(LOG_ERROR,"AVM1Broadcaster.broadcastMessage:"<<msg);
+	asAtom l = asAtomHandler::invalidAtom;
+	multiname m(nullptr);
+	m.name_type=multiname::NAME_STRING;
+	m.name_s_id=sys->getUniqueStringId("_listeners");
+	th->getVariableByMultiname(l,m);
+	if (asAtomHandler::isArray(l))
+	{
+		multiname mmsg(nullptr);
+		mmsg.name_type=multiname::NAME_STRING;
+		mmsg.name_s_id=sys->getUniqueStringId(msg);
+		Array* listeners = asAtomHandler::as<Array>(l);
+		for (uint32_t i =0; i < listeners->size(); i++)
+		{
+			asAtom o;
+			listeners->at_nocheck(o,i);
+			if (asAtomHandler::isObject(o))
+			{
+				ASObject* listener = asAtomHandler::getObjectNoCheck(o);
+				asAtom f = asAtomHandler::invalidAtom;
+				listener->getVariableByMultiname(f,mmsg);
+				asAtom res;
+				if (asAtomHandler::is<Function>(f))
+				{
+					asAtomHandler::as<Function>(f)->call(res,o,nullptr,0);
+				}
+				else if (asAtomHandler::is<SyntheticFunction>(f))
+				{
+					asAtomHandler::as<SyntheticFunction>(f)->call(res,o,nullptr,0,false,false);
+				}
+				else if (asAtomHandler::is<AVM1Function>(f))
+				{
+					asAtomHandler::as<AVM1Function>(f)->call(&res,&o,nullptr,0);
+				}
+			}
+		}
+	}
+}
+ASFUNCTIONBODY_ATOM(AVM1Broadcaster,addListener)
+{
+	ASObject* th = asAtomHandler::getObject(obj);
+	_NR<ASObject> listener;
+	ARG_UNPACK_ATOM(listener);
+	if (listener.isNull())
+	{
+		ret = asAtomHandler::falseAtom;
+		return;
+	}
+	asAtom l = asAtomHandler::invalidAtom;
+	multiname m(nullptr);
+	m.name_type=multiname::NAME_STRING;
+	m.name_s_id=sys->getUniqueStringId("_listeners");
+	th->getVariableByMultiname(l,m);
+	LOG(LOG_ERROR,"AVM1Broadcaster.addListener"<<th->toDebugString());
+	th->dumpVariables();
+	if (asAtomHandler::isArray(l))
+	{
+		// TODO spec is not clear if listener can be added multiple times
+		Array* listeners = asAtomHandler::as<Array>(l);
+		listeners->push(asAtomHandler::fromObjectNoPrimitive(listener.getPtr()));
+	}
+	ret = asAtomHandler::trueAtom;
+}
+ASFUNCTIONBODY_ATOM(AVM1Broadcaster,removeListener)
+{
+	ASObject* th = asAtomHandler::getObject(obj);
+	_NR<ASObject> listener;
+	ARG_UNPACK_ATOM(listener);
+	ret = asAtomHandler::falseAtom;
+	if (listener.isNull())
+		return;
+	asAtom l = asAtomHandler::invalidAtom;
+	multiname m(nullptr);
+	m.name_type=multiname::NAME_STRING;
+	m.name_s_id=sys->getUniqueStringId("_listeners");
+	th->getVariableByMultiname(l,m);
+	LOG(LOG_ERROR,"AVM1Broadcaster.removeListener "<<th->toDebugString());
+	th->dumpVariables();
+	if (asAtomHandler::isArray(l))
+	{
+		Array* listeners = asAtomHandler::as<Array>(l);
+		for (uint32_t i =0; i < listeners->size(); i++)
+		{
+			asAtom o=asAtomHandler::invalidAtom;
+			listeners->at_nocheck(o,i);
+			if (o.uintval==l.uintval)
+			{
+				asAtom res;
+				asAtom index = asAtomHandler::fromUInt(i);
+				listeners->removeAt(res,sys,obj,&index,1);
+				ret=asAtomHandler::trueAtom;
+				break;
+			}
+		}
+	}
+}
+
+void AVM1Bitmap::sinit(Class_base *c)
+{
+	Bitmap::sinit(c);
+	DisplayObject::AVM1SetupMethods(c);
+}

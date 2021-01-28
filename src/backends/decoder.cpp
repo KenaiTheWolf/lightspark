@@ -88,6 +88,13 @@ void VideoDecoder::uploadFence()
 {
 	assert(fenceCount);
 	ATOMIC_DECREMENT(fenceCount);
+	if (markedForDeletion && fenceCount==0)
+		delete this;
+}
+
+void VideoDecoder::markForDestruction()
+{
+	markedForDeletion=true;
 }
 
 void VideoDecoder::waitForFencing()
@@ -160,6 +167,17 @@ void FFMpegVideoDecoder::switchCodec(LS_VIDEO_CODEC codecId, uint8_t *initdata, 
 	{
 		//TODO: serialize access to avcodec_open
 		const enum CodecID FFMPEGcodecId=CODEC_ID_VP6F;
+		codec=avcodec_find_decoder(FFMPEGcodecId);
+		assert(codec);
+
+		//Exploit the frame rate information
+		assert(frameRateHint!=0.0);
+		frameRate=frameRateHint;
+	}
+	else if(codecId==VP6A)
+	{
+		//TODO: serialize access to avcodec_open
+		const enum CodecID FFMPEGcodecId=CODEC_ID_VP6A;
 		codec=avcodec_find_decoder(FFMPEGcodecId);
 		assert(codec);
 
@@ -286,8 +304,9 @@ void FFMpegVideoDecoder::setSize(uint32_t w, uint32_t h)
 	}
 }
 
-void FFMpegVideoDecoder::skipUntil(uint32_t time)
+uint32_t FFMpegVideoDecoder::skipUntil(uint32_t time)
 {
+	uint32_t ret=0;
 	while(1)
 	{
 		if(buffers.isEmpty())
@@ -295,7 +314,9 @@ void FFMpegVideoDecoder::skipUntil(uint32_t time)
 		if(buffers.front().time>=time)
 			break;
 		discardFrame();
+		ret++;
 	}
+	return ret;
 }
 void FFMpegVideoDecoder::skipAll()
 {

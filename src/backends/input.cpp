@@ -356,6 +356,18 @@ void InputThread::handleMouseMove(uint32_t x, uint32_t y, SDL_Keymod buttonState
 		mutexDragged.unlock();
 		_NR<InteractiveObject> selected = getMouseTarget(x, y, DisplayObject::MOUSE_CLICK);
 		number_t localX, localY;
+		if(!currentMouseOver.isNull() && currentMouseOver != selected)
+		{
+			number_t clocalX, clocalY;
+			currentMouseOver->globalToLocal(x,y,clocalX,clocalY);
+			currentMouseOver->incRef();
+			m_sys->currentVm->addIdleEvent(currentMouseOver,
+				_MR(Class<MouseEvent>::getInstanceS(m_sys,"mouseOut",clocalX,clocalY,true,buttonState,pressed,selected)));
+			currentMouseOver->incRef();
+			m_sys->currentVm->addIdleEvent(currentMouseOver,
+				_MR(Class<MouseEvent>::getInstanceS(m_sys,"rollOut",clocalX,clocalY,true,buttonState,pressed,selected)));
+			currentMouseOver.reset();
+		}
 		if (selected.isNull())
 			return;
 		selected->globalToLocal(x,y,localX,localY);
@@ -367,17 +379,6 @@ void InputThread::handleMouseMove(uint32_t x, uint32_t y, SDL_Keymod buttonState
 		}
 		else
 		{
-			if(!currentMouseOver.isNull())
-			{
-				number_t clocalX, clocalY;
-				currentMouseOver->globalToLocal(x,y,clocalX,clocalY);
-				currentMouseOver->incRef();
-				m_sys->currentVm->addIdleEvent(currentMouseOver,
-					_MR(Class<MouseEvent>::getInstanceS(m_sys,"mouseOut",clocalX,clocalY,true,buttonState,pressed,selected)));
-				currentMouseOver->incRef();
-				m_sys->currentVm->addIdleEvent(currentMouseOver,
-					_MR(Class<MouseEvent>::getInstanceS(m_sys,"rollOut",clocalX,clocalY,true,buttonState,pressed,selected)));
-			}
 			selected->incRef();
 			m_sys->currentVm->addIdleEvent(selected,
 				_MR(Class<MouseEvent>::getInstanceS(m_sys,"mouseOver",localX,localY,true,buttonState,pressed,currentMouseOver)));
@@ -430,7 +431,7 @@ bool InputThread::handleKeyboardShortcuts(const SDL_KeyboardEvent *keyevent)
 {
 	if (m_sys->getEngineData()->inFullScreenMode() && keyevent->keysym.sym == SDLK_ESCAPE)
 	{
-		m_sys->getEngineData()->setDisplayState("normal");
+		m_sys->getEngineData()->setDisplayState("normal",m_sys);
 		return true;
 	}
 	if (keyevent->keysym.sym == SDLK_MENU)
@@ -464,7 +465,7 @@ bool InputThread::handleKeyboardShortcuts(const SDL_KeyboardEvent *keyevent)
 			break;
 		case SDLK_f:
 			handled = true;
-			m_sys->getEngineData()->setDisplayState(m_sys->getEngineData()->inFullScreenMode() ? "normal" : "fullScreen");
+			m_sys->getEngineData()->setDisplayState(m_sys->getEngineData()->inFullScreenMode() ? "normal" : "fullScreen",m_sys);
 			break;
 		case SDLK_p:
 			handled = true;

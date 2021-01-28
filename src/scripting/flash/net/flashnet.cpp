@@ -664,10 +664,17 @@ ASFUNCTIONBODY_ATOM(SharedObject,getLocal)
 	tiny_string name;
 	tiny_string localPath;
 	bool secure;
-	ARG_UNPACK_ATOM(name) (localPath,"") (secure,false);
-	
-	if (name=="")
-		throwError<ASError>(0,"invalid name");
+	if (!sys->mainClip->usesActionScript3)
+	{
+		// contrary to spec, Adobe allows getLocal() calls with 0 arguments on AVM1
+		ARG_UNPACK_ATOM(name,"") (localPath,"") (secure,false);
+	}
+	else
+	{
+		ARG_UNPACK_ATOM(name) (localPath,"") (secure,false);
+		if (name=="")
+			throwError<ASError>(0,"invalid name");
+	}
 	if (secure)
 		LOG(LOG_NOT_IMPLEMENTED,"SharedObject.getLocal: parameter 'secure' is ignored");
 
@@ -778,7 +785,7 @@ ASFUNCTIONBODY_ATOM(SharedObject,_setPreventBackup)
 ASFUNCTIONBODY_ATOM(SharedObject,_getSize)
 {
 	SharedObject* th=asAtomHandler::as<SharedObject>(obj);
-	if (th->data)
+	if (th->data && th->data->numVariables())
 	{
 		ByteArray* b = Class<ByteArray>::getInstanceS(sys);
 		b->writeObject(th->data.getPtr());

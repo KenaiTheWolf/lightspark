@@ -3,7 +3,7 @@ Lightspark
 
 ![GitHub release](https://img.shields.io/github/release/lightspark/lightspark.svg)
 ![GitHub Last Commit](https://img.shields.io/github/last-commit/lightspark/lightspark.svg)
-[![Travis Status](https://img.shields.io/travis/com/lightspark/lightspark/master.svg?label=master%20branch)](https://travis-ci.com/lightspark/lightspark)
+[![Github Actions Status](https://img.shields.io/github/workflow/status/lightspark/lightspark/ci/master)](https://github.com/lightspark/lightspark/actions)
 
 Lightspark is an open source Flash player implementation for playing files in the SWF format. Lightspark can run as a web browser plugin or as a standalone application.
 
@@ -37,15 +37,15 @@ The following tools are also required:
 To install these, run the following command(s):
 ### Ubuntu (tested on 19.10):
 ```
-sudo apt install git gcc nasm cmake libcurl4-gnutls-dev libsdl2-mixer-dev libsdl2-dev libpango1.0-dev libcairo2-dev libavcodec-dev libavresample-dev libglew-dev librtmp-dev libjpeg-dev libavformat-dev liblzma-dev
+sudo apt install git gcc nasm cmake gettext libcurl4-gnutls-dev libsdl2-mixer-dev libsdl2-dev libpango1.0-dev libcairo2-dev libavcodec-dev libavresample-dev libglew-dev librtmp-dev libjpeg-dev libavformat-dev liblzma-dev
 ```
 
-### Fedora (tested on 31):
+### Fedora (tested on 33):
 RPMFusion is required and will be enabled as part of this process.
 
 ```
 sudo dnf install https://download1.rpmfusion.org/free/fedora/rpmfusion-free-release-$(rpm -E %fedora).noarch.rpm
-sudo dnf install nasm cmake make g++ xz-devel pango-devel SDL2-devel SDL2_mixer-devel libcurl-devel librtmp-devel ffmpeg-devel mesa-libGL-devel glew-devel libjpeg-turbo-devel
+sudo dnf builddep lightspark
 ```
 If you want commands for a distro not listed here, please [create an issue](https://github.com/lightspark/lightspark/issues) if it doesn't already exist.
 
@@ -53,12 +53,12 @@ If JIT compilation using llvm is enabled (this is disabled by default), you also
 
 If compiling the PPAPI (Chromium) plugin is enabled (on by default), keep in mind that it will replace the Adobe Flash plugin, as only one Flash plugin is allowed in Chromium.
 
-There are two ways of building Lightspark. You can use the included script, by running `./build`. or for a debug build, run `./build -d`. You can also do it manually, with the following commands:
+There are two ways of building Lightspark. You can use the included script, by running `./build.sh`. or for a debug build, run `./build.sh -d`. You can also do it manually, with the following commands:
 
 ```bash
 cd lightspark
-mkdir obj
-cd obj
+mkdir build
+cd build
 cmake -DCMAKE_BUILD_TYPE=Release ..
 make
 sudo make install
@@ -66,7 +66,7 @@ sudo make install
 
 The ``CMAKE_BUILD_TYPE`` options are: Debug LeanDebug Release RelWithDebInfo Profile
 
-If you run into issues building Lightspark, firstly try deleting the contents of `obj`, and run `./build` file again. If you continue to have issues, please [let us know](https://github.com/lightspark/lightspark/issues).
+If you run into issues building Lightspark, firstly try deleting the contents of `obj`, and run `./build.sh` file again. If you continue to have issues, please [let us know](https://github.com/lightspark/lightspark/issues).
 
 Usage
 ---------

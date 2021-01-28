@@ -26,6 +26,7 @@
 #include "scripting/flash/media/flashmedia.h"
 #include "scripting/flash/geom/flashgeom.h"
 #include "scripting/toplevel/Vector.h"
+#include "scripting/flash/display/BitmapData.h"
 
 namespace lightspark
 {
@@ -48,7 +49,7 @@ class AVM1Shape: public Shape
 {
 public:
 	AVM1Shape(Class_base* c):Shape(c){}
-	AVM1Shape(Class_base* c, const tokensVector& tokens, float scaling,uint32_t tagID,const RECT& _bounds):Shape(c,tokens,scaling,tagID,_bounds) {}
+	AVM1Shape(Class_base* c, float scaling, DefineShapeTag* tag):Shape(c,scaling,tag) {}
 	static void sinit(Class_base* c);
 };
 
@@ -68,6 +69,10 @@ public:
 	static void sinit(Class_base* c);
 	ASFUNCTION_ATOM(_getDisplayState);
 	ASFUNCTION_ATOM(_setDisplayState);
+	ASFUNCTION_ATOM(getAlign);
+	ASFUNCTION_ATOM(setAlign);
+	ASFUNCTION_ATOM(addResizeListener);
+	ASFUNCTION_ATOM(removeResizeListener);
 };
 
 class AVM1MovieClipLoader: public Loader
@@ -99,6 +104,25 @@ public:
 	ASFUNCTION_ATOM(setRGB);
 	ASFUNCTION_ATOM(getTransform);
 	ASFUNCTION_ATOM(setTransform);
+};
+
+class AVM1Broadcaster: public ASObject
+{
+public:
+	AVM1Broadcaster(Class_base* c):ASObject(c) {}
+	static void sinit(Class_base* c);
+	ASFUNCTION_ATOM(initialize);
+	ASFUNCTION_ATOM(broadcastMessage);
+	ASFUNCTION_ATOM(addListener);
+	ASFUNCTION_ATOM(removeListener);
+};
+
+class AVM1Bitmap: public Bitmap
+{
+public:
+	AVM1Bitmap(Class_base* c, _NR<LoaderInfo> li=NullRef, std::istream *s = nullptr, FILE_TYPE type=FT_UNKNOWN):Bitmap(c,li,s,type) {}
+	AVM1Bitmap(Class_base* c, _R<BitmapData> data):Bitmap(c,data) {}
+	static void sinit(Class_base* c);
 };
 
 }

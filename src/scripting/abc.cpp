@@ -153,6 +153,7 @@
 #include "scripting/flash/media/flashmedia.h"
 #include "scripting/flash/media/audiodecoder.h"
 #include "scripting/flash/media/audiooutputchangereason.h"
+#include "scripting/flash/media/avnetworkingparams.h"
 #include "scripting/flash/media/h264level.h"
 #include "scripting/flash/media/h264profile.h"
 #include "scripting/flash/media/microphoneenhancedmode.h"
@@ -166,14 +167,20 @@
 #include "scripting/flash/net/netgroupreplicationstrategy.h"
 #include "scripting/flash/net/netgroupsendmode.h"
 #include "scripting/flash/net/netgroupsendresult.h"
+#include "scripting/flash/security/certificatestatus.h"
 #include "scripting/flash/system/messagechannelstate.h"
 #include "scripting/flash/system/securitypanel.h"
+#include "scripting/flash/system/systemupdater.h"
 #include "scripting/flash/system/systemupdatertype.h"
 #include "scripting/flash/system/touchscreentype.h"
+#include "scripting/flash/system/ime.h"
+#include "scripting/flash/system/jpegloadercontext.h"
 #include "scripting/flash/xml/flashxml.h"
 #include "scripting/flash/errors/flasherrors.h"
+#include "scripting/flash/text/csmsettings.h"
 #include "scripting/flash/text/flashtext.h"
 #include "scripting/flash/text/flashtextengine.h"
+#include "scripting/flash/text/textrenderer.h"
 #include "scripting/flash/ui/Keyboard.h"
 #include "scripting/flash/ui/Mouse.h"
 #include "scripting/flash/ui/Multitouch.h"
@@ -319,22 +326,22 @@ void ScriptLimitsTag::execute(RootMovieClip* root) const
 
 void ABCVm::registerClassesAVM1()
 {
+	if (m_sys->avm1global)
+		return;
 	Global* builtinavm1 = Class<Global>::getInstanceS(m_sys,(ABCContext*)nullptr, 0);
 
 	registerClassesToplevel(builtinavm1);
 
-	if (!m_sys->mainClip->usesActionScript3)
-	{
-		Class<ASObject>::getRef(m_sys)->setDeclaredMethodByQName("addProperty","",Class<IFunction>::getFunction(m_sys,ASObject::addProperty),NORMAL_METHOD,true);
-		Class<ASObject>::getRef(m_sys)->prototype->setVariableByQName("addProperty","",Class<IFunction>::getFunction(m_sys,ASObject::addProperty),DYNAMIC_TRAIT);
-		Class<ASObject>::getRef(m_sys)->setDeclaredMethodByQName("registerClass","",Class<IFunction>::getFunction(m_sys,ASObject::registerClass),NORMAL_METHOD,false);
-		Class<ASObject>::getRef(m_sys)->prototype->setVariableByQName("registerClass","",Class<IFunction>::getFunction(m_sys,ASObject::registerClass),DYNAMIC_TRAIT);
-	}
+	Class<ASObject>::getRef(m_sys)->setDeclaredMethodByQName("addProperty","",Class<IFunction>::getFunction(m_sys,ASObject::addProperty),NORMAL_METHOD,true);
+	Class<ASObject>::getRef(m_sys)->prototype->setVariableByQName("addProperty","",Class<IFunction>::getFunction(m_sys,ASObject::addProperty),DYNAMIC_TRAIT);
+	Class<ASObject>::getRef(m_sys)->setDeclaredMethodByQName("registerClass","",Class<IFunction>::getFunction(m_sys,ASObject::registerClass),NORMAL_METHOD,false);
+	Class<ASObject>::getRef(m_sys)->prototype->setVariableByQName("registerClass","",Class<IFunction>::getFunction(m_sys,ASObject::registerClass),DYNAMIC_TRAIT);
 
 	builtinavm1->registerBuiltin("ASSetPropFlags","",_MR(Class<IFunction>::getFunction(m_sys,AVM1_ASSetPropFlags)));
 	builtinavm1->registerBuiltin("setInterval","",_MR(Class<IFunction>::getFunction(m_sys,setInterval)));
 	builtinavm1->registerBuiltin("clearInterval","",_MR(Class<IFunction>::getFunction(m_sys,clearInterval)));
 
+	builtinavm1->registerBuiltin("object","",Class<ASObject>::getRef(m_sys));
 	builtinavm1->registerBuiltin("Button","",Class<SimpleButton>::getRef(m_sys));
 	builtinavm1->registerBuiltin("Color","",Class<AVM1Color>::getRef(m_sys));
 	builtinavm1->registerBuiltin("Mouse","",Class<AVM1Mouse>::getRef(m_sys));
@@ -353,8 +360,10 @@ void ABCVm::registerClassesAVM1()
 	builtinavm1->registerBuiltin("NetConnection","",Class<NetConnection>::getRef(m_sys));
 	builtinavm1->registerBuiltin("NetStream","",Class<NetStream>::getRef(m_sys));
 	builtinavm1->registerBuiltin("Video","",Class<AVM1Video>::getRef(m_sys));
+	builtinavm1->registerBuiltin("AsBroadcaster","",Class<AVM1Broadcaster>::getRef(m_sys));
+	builtinavm1->registerBuiltin("LocalConnection","",Class<AVM1LocalConnection>::getRef(m_sys));
 
-	if (m_sys->getSwfVersion() >= 8 && !m_sys->mainClip->usesActionScript3)
+	if (m_sys->getSwfVersion() >= 8)
 	{
 		ASObject* systempackage = Class<ASObject>::getInstanceS(m_sys);
 		builtinavm1->setVariableByQName("System",nsNameAndKind(m_sys,"",PACKAGE_NAMESPACE),systempackage,CONSTANT_TRAIT);
@@ -389,6 +398,8 @@ void ABCVm::registerClassesAVM1()
 		flashgeompackage->setVariableByQName("Matrix","flash.geom",Class<Matrix>::getRef(m_sys).getPtr(),CONSTANT_TRAIT);
 		flashgeompackage->setVariableByQName("ColorTransform","flash.geom",Class<ColorTransform>::getRef(m_sys).getPtr(),CONSTANT_TRAIT);
 		flashgeompackage->setVariableByQName("Transform","flash.geom",Class<ColorTransform>::getRef(m_sys).getPtr(),CONSTANT_TRAIT);
+		flashgeompackage->setVariableByQName("Rectangle","flash.geom",Class<Rectangle>::getRef(m_sys).getPtr(),CONSTANT_TRAIT);
+		flashgeompackage->setVariableByQName("Point","flash.geom",Class<Point>::getRef(m_sys).getPtr(),CONSTANT_TRAIT);
 	}
 	m_sys->avm1global=builtinavm1;
 }
@@ -413,7 +424,6 @@ void ABCVm::registerClassesToplevel(Global* builtin)
 	builtin->registerBuiltin("RegExp","",Class<RegExp>::getRef(m_sys));
 	builtin->registerBuiltin("QName","",Class<ASQName>::getRef(m_sys));
 	builtin->registerBuiltin("uint","",Class<UInteger>::getRef(m_sys));
-	builtin->registerBuiltin("Vector","__AS3__.vec",_MR(Template<Vector>::getTemplate(m_sys)));
 	builtin->registerBuiltin("Error","",Class<ASError>::getRef(m_sys));
 	builtin->registerBuiltin("SecurityError","",Class<SecurityError>::getRef(m_sys));
 	builtin->registerBuiltin("ArgumentError","",Class<ArgumentError>::getRef(m_sys));
@@ -428,6 +438,7 @@ void ABCVm::registerClassesToplevel(Global* builtin)
 	builtin->registerBuiltin("VerifyError","",Class<VerifyError>::getRef(m_sys));
 	if (m_sys->mainClip->usesActionScript3)
 	{
+		builtin->registerBuiltin("Vector","__AS3__.vec",_MR(Template<Vector>::getTemplate(m_sys)));
 		builtin->registerBuiltin("XML","",Class<XML>::getRef(m_sys));
 		builtin->registerBuiltin("XMLList","",Class<XMLList>::getRef(m_sys));
 	}
@@ -566,6 +577,7 @@ void ABCVm::registerClasses()
 	builtin->registerBuiltin("ShaderFilter","flash.filters",Class<ShaderFilter>::getRef(m_sys));
 
 	builtin->registerBuiltin("AntiAliasType","flash.text",Class<AntiAliasType>::getRef(m_sys));
+	builtin->registerBuiltin("CSMSettings","flash.text",Class<CSMSettings>::getRef(m_sys));
 	builtin->registerBuiltin("Font","flash.text",Class<ASFont>::getRef(m_sys));
 	builtin->registerBuiltin("FontStyle","flash.text",Class<FontStyle>::getRef(m_sys));
 	builtin->registerBuiltin("FontType","flash.text",Class<FontType>::getRef(m_sys));
@@ -580,6 +592,7 @@ void ABCVm::registerClasses()
 	builtin->registerBuiltin("TextFormatAlign","flash.text",Class<TextFormatAlign>::getRef(m_sys));
 	builtin->registerBuiltin("TextLineMetrics","flash.text",Class<TextLineMetrics>::getRef(m_sys));
 	builtin->registerBuiltin("TextInteractionMode","flash.text",Class<TextInteractionMode>::getRef(m_sys));
+	builtin->registerBuiltin("TextRenderer","flash.text",Class<TextRenderer>::getRef(m_sys));
 	builtin->registerBuiltin("StaticText","flash.text",Class<StaticText>::getRef(m_sys));
 
 	builtin->registerBuiltin("BreakOpportunity","flash.text.engine",Class<BreakOpportunity>::getRef(m_sys));
@@ -742,6 +755,8 @@ void ABCVm::registerClasses()
 	builtin->registerBuiltin("Sample","flash.sampler",Class<Sample>::getRef(m_sys));
 	builtin->registerBuiltin("StackFrame","flash.sampler",Class<StackFrame>::getRef(m_sys));
 
+	builtin->registerBuiltin("CertificateStatus","flash.security",Class<CertificateStatus>::getRef(m_sys));
+
 	builtin->registerBuiltin("fscommand","flash.system",_MR(Class<IFunction>::getFunction(m_sys,fscommand)));
 	builtin->registerBuiltin("Capabilities","flash.system",Class<Capabilities>::getRef(m_sys));
 	builtin->registerBuiltin("Security","flash.system",Class<Security>::getRef(m_sys));
@@ -756,11 +771,15 @@ void ABCVm::registerClasses()
 	builtin->registerBuiltin("IMEConversionMode","flash.system",Class<IMEConversionMode>::getRef(m_sys));
 	builtin->registerBuiltin("MessageChannelState","flash.system",Class<MessageChannelState>::getRef(m_sys));
 	builtin->registerBuiltin("SecurityPanel","flash.system",Class<SecurityPanel>::getRef(m_sys));
+        builtin->registerBuiltin("SystemUpdater","flash.system",Class<SystemUpdater>::getRef(m_sys));
 	builtin->registerBuiltin("SystemUpdaterType","flash.system",Class<SystemUpdaterType>::getRef(m_sys));
 	builtin->registerBuiltin("TouchscreenType","flash.system",Class<TouchscreenType>::getRef(m_sys));
+	builtin->registerBuiltin("IME","flash.system",Class<IME>::getRef(m_sys));
+	builtin->registerBuiltin("JPEGLoaderContext","flash.system",Class<JPEGLoaderContext>::getRef(m_sys));
 
 	builtin->registerBuiltin("AudioDecoder","flash.media",Class<MediaAudioDecoder>::getRef(m_sys));
 	builtin->registerBuiltin("AudioOutputChangeReason","flash.media",Class<AudioOutputChangeReason>::getRef(m_sys));
+    builtin->registerBuiltin("AVNetworkingParams","flash.media",Class<AVNetworkingParams>::getRef(m_sys));
 	builtin->registerBuiltin("H264Level","flash.media",Class<H264Level>::getRef(m_sys));
 	builtin->registerBuiltin("H264Profile","flash.media",Class<H264Profile>::getRef(m_sys));
 	builtin->registerBuiltin("MicrophoneEnhancedMode","flash.media",Class<MicrophoneEnhancedMode>::getRef(m_sys));
@@ -1778,14 +1797,19 @@ void ABCVm::publicHandleEvent(EventDispatcher* dispatcher, _R<Event> event)
 			event->currentTarget=NullRef;
 		}
 	}
+	// ensure that keyboard events are also handled for the stage
+	if (event->is<KeyboardEvent>() && !dispatcher->is<Stage>())
+	{
+		dispatcher->getSystemState()->stage->incRef();
+		event->currentTarget=_MR(dispatcher->getSystemState()->stage);
+		dispatcher->getSystemState()->stage->handleEvent(event);
+		event->currentTarget=NullRef;
+	}
 	if (event->type == "mouseDown" && dispatcher->is<InteractiveObject>())
 	{
 		dispatcher->incRef();
 		dispatcher->getSystemState()->stage->setFocusTarget(_MR(dispatcher->as<InteractiveObject>()));
 	}
-	else
-		dispatcher->getSystemState()->stage->setFocusTarget(NullRef);
-	
 	dispatcher->getSystemState()->stage->AVM1HandleEvent(dispatcher,event.getPtr());
 	
 	/* This must even be called if stop*Propagation has been called */
@@ -1915,6 +1939,8 @@ void ABCVm::handleEvent(std::pair<_NR<EventDispatcher>, _R<Event> > e)
 				LOG(LOG_CALLS,"EXECUTE_FRAMESCRIPT");
 				assert(!ev->clip.isNull());
 				ev->clip->executeFrameScript();
+				if (ev->clip == m_sys->stage)
+					m_sys->swapAsyncDrawJobQueue();
 				break;
 			}
 			case ADVANCE_FRAME:

@@ -75,7 +75,7 @@ ASFUNCTIONBODY_ATOM(AVM1Sound,attachSound)
 	if(th->clip)
 	{
 		th->soundChannel->incRef();
-		th->clip->setSound(th->soundChannel.getPtr());
+		th->clip->setSound(th->soundChannel.getPtr(),false);
 	}
 }
 ASFUNCTIONBODY_ATOM(AVM1Sound,getVolume)
@@ -127,5 +127,27 @@ ASFUNCTIONBODY_ATOM(AVM1Sound,getPosition)
 	}
 	else
 		asAtomHandler::setInt(ret,sys,0);
+}
+
+void AVM1Sound::AVM1HandleEvent(EventDispatcher *dispatcher, Event* e)
+{
+	if (dispatcher == this->soundChannel.getPtr())
+	{
+		if (e->type == "soundComplete")
+		{
+			asAtom func=asAtomHandler::invalidAtom;
+			multiname m(nullptr);
+			m.name_type=multiname::NAME_STRING;
+			m.isAttribute = false;
+			m.name_s_id=getSystemState()->getUniqueStringId("onSoundComplete");
+			getVariableByMultiname(func,m);
+			if (asAtomHandler::is<AVM1Function>(func))
+			{
+				asAtom ret=asAtomHandler::invalidAtom;
+				asAtom obj = asAtomHandler::fromObject(this);
+				asAtomHandler::as<AVM1Function>(func)->call(&ret,&obj,nullptr,0);
+			}
+		}
+	}
 }
 

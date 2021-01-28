@@ -91,6 +91,7 @@ private:
 	ACQUIRE_RELEASE_FLAG(finishedLoading);
 	
 	unordered_map<uint32_t,_NR<IFunction>> avm1ClassConstructors;
+	unordered_map<uint32_t,AVM1InitActionTag*> avm1InitActionTags;
 public:
 	RootMovieClip(_NR<LoaderInfo> li, _NR<ApplicationDomain> appDomain, _NR<SecurityDomain> secDomain, Class_base* c);
 	~RootMovieClip();
@@ -99,6 +100,7 @@ public:
 	bool isWaitingForParser() { return waitingforparser; }
 	void constructionComplete() override;
 	void afterConstruction() override;
+	bool needsActionScript3() const override { return this->usesActionScript3;}
 	uint32_t version;
 	uint32_t fileLength;
 	bool hasSymbolClass;
@@ -113,6 +115,7 @@ public:
 	void addToDictionary(DictionaryTag* r);
 	DictionaryTag* dictionaryLookup(int id);
 	DictionaryTag* dictionaryLookupByName(uint32_t nameID);
+	void resizeCompleted();
 	void labelCurrentFrame(const STRING& name);
 	void commitFrame(bool another);
 	void revertFrame();
@@ -148,6 +151,8 @@ public:
 	// map AVM1 class constructors to named tags
 	bool AVM1registerTagClass(const tiny_string& name, _NR<IFunction> theClassConstructor);
 	AVM1Function* AVM1getClassConstructor(uint32_t spriteID);
+	void AVM1registerInitActionTag(uint32_t spriteID, AVM1InitActionTag* tag);
+	void AVM1checkInitActions(MovieClip *sprite);
 };
 
 class ThreadProfile
@@ -268,6 +273,10 @@ private:
 	   The lock for the invalidate queue
 	*/
 	Mutex invalidateQueueLock;
+	
+	Mutex drawjobLock;
+	std::unordered_set<AsyncDrawJob*> drawJobsNew;
+	std::unordered_set<AsyncDrawJob*> drawJobsPending;
 #ifdef PROFILING_SUPPORT
 	/*
 	   Output file for the profiling data
@@ -293,6 +302,7 @@ private:
 	Mutex mainsignalMutex;
 	Cond mainsignalCond;
 	void systemFinalize();
+	std::map<tiny_string, Class_base *> classnamemap;
 public:
 	void setURL(const tiny_string& url) DLL_PUBLIC;
 	tiny_string getDumpedSWFPath() const { return dumpedSWFPath;}
@@ -309,6 +319,7 @@ public:
 	asAtom nanAtom;
 	// the global object for AVM1
 	Global* avm1global;
+	void setupAVM1();
 	// Error types used to decide when to exit, extend as a bitmap
 	enum ERROR_TYPE { ERROR_NONE    = 0x0000,
 			  ERROR_PARSING = 0x0001,
@@ -465,10 +476,10 @@ public:
 	void unregisterFrameListener(_R<DisplayObject> clip);
 
 	//Invalidation queue management
-	int32_t currentflushstep;
-	int32_t nextflushstep;
 	void addToInvalidateQueue(_R<DisplayObject> d) override;
 	void flushInvalidationQueue();
+	void AsyncDrawJobCompleted(AsyncDrawJob* j);
+	void swapAsyncDrawJobQueue();
 
 	//Resize support
 	void resizeCompleted();
@@ -540,6 +551,7 @@ public:
 	Mutex initializedMutex;
 	Cond initializedCond;
 	void waitInitialized();
+	void getClassInstanceByName(asAtom &ret, const tiny_string& clsname);
 };
 
 class ParseThread: public IThreadJob

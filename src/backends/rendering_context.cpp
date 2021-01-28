@@ -175,7 +175,7 @@ void GLRenderContext::renderTextured(const TextureChunk& chunk, int32_t x, int32
 	engineData->exec_glUniform2f(startPositionUniform, xtransformed,ytransformed);
 	engineData->exec_glUniform2f(scaleUniform, xscale,yscale);
 	engineData->exec_glUniform4f(colortransMultiplyUniform, redMultiplier,greenMultiplier,blueMultiplier,alphaMultiplier);
-	engineData->exec_glUniform4f(colortransAddUniform, redOffset,greenOffset,blueOffset,alphaOffset);
+	engineData->exec_glUniform4f(colortransAddUniform, redOffset/255.0,greenOffset/255.0,blueOffset/255.0,alphaOffset/255.0);
 	//Set matrix
 	setMatrixUniform(LSGL_MODELVIEW);
 
@@ -303,8 +303,8 @@ CairoRenderContext::~CairoRenderContext()
 	for(auto it=customSurfaces.begin();it!=customSurfaces.end();it++)
 	{
 		//Delete and reset here the buffer memory stored in chunks
-		delete[] it->second.tex.chunks;
-		it->second.tex.chunks=NULL;
+		delete[] it->second.tex->chunks;
+		it->second.tex->chunks=nullptr;
 	}
 	cairo_destroy(cr);
 }
@@ -433,6 +433,8 @@ CachedSurface& CairoRenderContext::allocateCustomSurface(const DisplayObject* d,
 	auto ret=customSurfaces.insert(make_pair(d, CachedSurface()));
 //	assert(ret.second);
 	CachedSurface& surface=ret.first->second;
-	surface.tex.chunks=(uint32_t*)texBuf;
+	if (surface.tex==nullptr)
+		surface.tex=new TextureChunk();
+	surface.tex->chunks=(uint32_t*)texBuf;
 	return surface;
 }

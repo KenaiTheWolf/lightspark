@@ -40,6 +40,7 @@ namespace lightspark
 
 class RootMovieClip;
 class DisplayListTag;
+class DefineShapeTag;
 class AVM1ActionTag;
 class AVM1InitActionTag;
 class DefineButtonTag;
@@ -146,6 +147,7 @@ public:
 	void checkColorTransformForLegacyChildAt(int32_t depth, const CXFORMWITHALPHA& colortransform);
 	void deleteLegacyChildAt(int32_t depth);
 	void insertLegacyChildAt(int32_t depth, DisplayObject* obj);
+	DisplayObject* findLegacyChildByTagID(uint32_t tagid);
 	int findLegacyChildDepth(DisplayObject* obj);
 	void transformLegacyChildAt(int32_t depth, const MATRIX& mat);
 	uint32_t getMaxLegacyChildDepth();
@@ -246,26 +248,21 @@ protected:
 	bool boundsRect(number_t& xmin, number_t& xmax, number_t& ymin, number_t& ymax) const override;
 	bool renderImpl(RenderContext& ctxt) const override
 		{ return TokenContainer::renderImpl(ctxt); }
-	_NR<DisplayObject> hitTestImpl(_NR<DisplayObject> last, number_t x, number_t y, DisplayObject::HIT_TYPE type,bool interactiveObjectsOnly) override
-		{
-			if (interactiveObjectsOnly)
-				this->incRef();
-			return TokenContainer::hitTestImpl(interactiveObjectsOnly ? _NR<DisplayObject>(this) : last,x,y, type); 
-		}
-	uint32_t fromDefineShapeTag;
-	RECT bounds;
+	_NR<DisplayObject> hitTestImpl(_NR<DisplayObject> last, number_t x, number_t y, DisplayObject::HIT_TYPE type,bool interactiveObjectsOnly) override;
+	
+	DefineShapeTag* fromTag;
 public:
 	Shape(Class_base* c);
-	Shape(Class_base* c, const tokensVector& tokens, float scaling, uint32_t tagID, const RECT& _bounds);
-	uint32_t getTagID() const override { return fromDefineShapeTag; }
-	void finalize() override;
+	Shape(Class_base* c, float scaling, DefineShapeTag *tag);
+	void setupShape(lightspark::DefineShapeTag *tag, float _scaling);
+	uint32_t getTagID() const override;
+	bool destruct() override;
 	static void sinit(Class_base* c);
 	static void buildTraits(ASObject* o);
 	ASFUNCTION_ATOM(_constructor);
 	ASFUNCTION_ATOM(_getGraphics);
 	void requestInvalidation(InvalidateQueue* q, bool forceTextureRefresh=false) override { TokenContainer::requestInvalidation(q,forceTextureRefresh); }
-	IDrawable* invalidate(DisplayObject* target, const MATRIX& initialMatrix,bool smoothing) override
-	{ return TokenContainer::invalidate(target, initialMatrix,smoothing); }
+	IDrawable* invalidate(DisplayObject* target, const MATRIX& initialMatrix,bool smoothing) override;
 };
 
 class DefineMorphShapeTag;
@@ -441,6 +438,7 @@ private:
 	//Sprite as its hitArea. Hits will be relayed to hitTarget.
 	_NR<Sprite> hitTarget;
 	_NR<SoundChannel> sound;
+	bool streamingsound;
 protected:
 	bool boundsRect(number_t& xmin, number_t& xmax, number_t& ymin, number_t& ymax) const override;
 	bool boundsRectWithoutChildren(number_t& xmin, number_t& xmax, number_t& ymin, number_t& ymax) const override
@@ -456,7 +454,7 @@ protected:
 public:
 	bool dragged;
 	Sprite(Class_base* c);
-	void setSound(SoundChannel* s);
+	void setSound(SoundChannel* s, bool forstreaming);
 	void appendSound(unsigned char* buf, int len);
 	bool destruct() override;
 	static void sinit(Class_base* c);
@@ -581,14 +579,12 @@ private:
 	uint32_t getCurrentScene() const;
 	const Scene_data *getScene(const tiny_string &sceneName) const;
 	uint32_t getFrameIdByNumber(uint32_t i, const tiny_string& sceneName) const;
-	uint32_t getFrameIdByLabel(const tiny_string& l, const tiny_string& sceneName) const;
 	std::map<uint32_t,asAtom > frameScripts;
 	uint32_t fromDefineSpriteTag;
 	uint32_t frameScriptToExecute;
+	uint32_t lastratio;
 	bool inExecuteFramescript;
 	bool inAVM1Attachment;
-
-	std::list<Frame>::iterator currentframeIterator;
 protected:
 	const CLIPACTIONS* actions;
 	/* This is read from the SWF header. It's only purpose is for flash.display.MovieClip.totalFrames */
@@ -596,6 +592,7 @@ protected:
 	ASPROPERTY_GETTER_SETTER(bool, enabled);
 	void checkFrameScriptToExecute();
 public:
+	uint32_t getFrameIdByLabel(const tiny_string& l, const tiny_string& sceneName) const;
 	void constructionComplete() override;
 	void afterConstruction() override;
 	void resetLegacyState() override;
@@ -635,6 +632,7 @@ public:
 	void declareFrame() override;
 	void initFrame() override;
 	void executeFrameScript() override;
+	void checkRatio(uint32_t ratio) override;
 
 	void afterLegacyInsert() override;
 	void afterLegacyDelete(DisplayObjectContainer* par) override;
@@ -660,6 +658,7 @@ public:
 	ASFUNCTION_ATOM(AVM1LineTo);
 	ASFUNCTION_ATOM(AVM1LineStyle);
 	ASFUNCTION_ATOM(AVM1BeginFill);
+	ASFUNCTION_ATOM(AVM1BeginGradientFill);
 	ASFUNCTION_ATOM(AVM1EndFill);
 	ASFUNCTION_ATOM(AVM1GetNextHighestDepth);
 	ASFUNCTION_ATOM(AVM1AttachBitmap);
@@ -677,7 +676,6 @@ public:
 	uint32_t internalGetWidth() const;
 private:
 	Mutex avm1listenerMutex;
-	void onAlign(const tiny_string&);
 	void onColorCorrection(const tiny_string&);
 	void onFullScreenSourceRect(_NR<Rectangle>);
 	// Keyboard focus object is accessed from the VM thread (AS
@@ -691,10 +689,12 @@ private:
 	vector<_R<ASObject>> avm1KeyboardListeners;
 	vector<_R<ASObject>> avm1MouseListeners;
 	vector<_R<ASObject>> avm1EventListeners;
+	vector<_R<ASObject>> avm1ResizeListeners;
 protected:
 	virtual void eventListenerAdded(const tiny_string& eventName) override;
 	bool renderImpl(RenderContext& ctxt) const override;
 public:
+	void onAlign(const tiny_string&);
 	bool renderStage3D();
 	void onDisplayState(const tiny_string&);
 	_NR<DisplayObject> hitTestImpl(_NR<DisplayObject> last, number_t x, number_t y, DisplayObject::HIT_TYPE type,bool interactiveObjectsOnly) override;
@@ -749,6 +749,8 @@ public:
 	void AVM1RemoveMouseListener(ASObject* o);
 	void AVM1AddEventListener(ASObject *o);
 	void AVM1RemoveEventListener(ASObject *o);
+	void AVM1AddResizeListener(ASObject *o);
+	bool AVM1RemoveResizeListener(ASObject *o);
 };
 
 class StageScaleMode: public ASObject

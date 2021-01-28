@@ -103,6 +103,7 @@ public:
 	Mutex mutexRendering;
 	volatile bool screenshotneeded;
 	volatile bool inSettings;
+	volatile bool canrender;
 	RenderThread(SystemState* s);
 	~RenderThread();
 	/**
@@ -118,7 +119,7 @@ public:
 
 	void init();
 	void deinit();
-	bool doRender(ThreadProfile *profile=NULL, Chronometer *chronometer=NULL);
+	bool doRender(ThreadProfile *profile=nullptr, Chronometer *chronometer=nullptr);
 	void generateScreenshot();
 	/**
 	 * @brief updates the arguments of a cachedSurface without recreating the texture
@@ -129,12 +130,18 @@ public:
 	void addRefreshableSurface(IDrawable* d,_NR<DisplayObject> o)
 	{
 		Locker l(mutexRefreshSurfaces);
-		refreshNeeded=true;
 		refreshableSurface s;
 		s.displayobject = o;
 		s.drawable = d;
 		surfacesToRefresh.push_back(s);
-		event.signal();
+	}
+	void signalSurfaceRefresh()
+	{
+		if (!surfacesToRefresh.empty())
+		{
+			refreshNeeded=true;
+			event.signal();
+		}
 	}
 	/**
 		Allocates a chunk from the shared texture

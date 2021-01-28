@@ -291,7 +291,7 @@ struct asfreelist
 extern SystemState* getSys();
 enum TRAIT_KIND { NO_CREATE_TRAIT=0, DECLARED_TRAIT=1, DYNAMIC_TRAIT=2, INSTANCE_TRAIT=5, CONSTANT_TRAIT=9 /* constants are also declared traits */ };
 enum GET_VARIABLE_RESULT {GETVAR_NORMAL=0x00, GETVAR_CACHEABLE=0x01, GETVAR_ISGETTER=0x02, GETVAR_ISCONSTANT=0x04};
-enum GET_VARIABLE_OPTION {NONE=0x00, SKIP_IMPL=0x01, FROM_GETLEX=0x02, DONT_CALL_GETTER=0x04, NO_INCREF=0x08};
+enum GET_VARIABLE_OPTION {NONE=0x00, SKIP_IMPL=0x01, FROM_GETLEX=0x02, DONT_CALL_GETTER=0x04, NO_INCREF=0x08, DONT_CHECK_CLASS=0x10};
 
 #ifdef LIGHTSPARK_64
 union asAtom
@@ -504,7 +504,7 @@ public:
 	static asAtom asTypelate(asAtom& a, asAtom& b);
 	static bool isTypelate(asAtom& a,ASObject* type);
 	static FORCE_INLINE number_t toNumber(const asAtom& a);
-	static FORCE_INLINE number_t AVM1toNumber(asAtom& a,int swfversion);
+	static FORCE_INLINE number_t AVM1toNumber(asAtom& a,bool usesActionScript3);
 	static FORCE_INLINE bool AVM1toBool(asAtom& a);
 	static FORCE_INLINE int32_t toInt(const asAtom& a);
 	static FORCE_INLINE int32_t toIntStrict(const asAtom& a);
@@ -834,11 +834,10 @@ public:
 	asfreelist* objfreelist;
 private:
 	variables_map Variables;
-	unsigned int varcount;
 	Class_base* classdef;
-	inline const variable* findGettable(const multiname& name, uint32_t* nsRealId = NULL) const DLL_LOCAL
+	inline const variable* findGettable(const multiname& name, uint32_t* nsRealId = nullptr) const DLL_LOCAL
 	{
-		const variable* ret=varcount ? Variables.findObjVarConst(getSystemState(),name,DECLARED_TRAIT|DYNAMIC_TRAIT,nsRealId):NULL;
+		const variable* ret=Variables.findObjVarConst(getSystemState(),name,DECLARED_TRAIT|DYNAMIC_TRAIT,nsRealId);
 		if(ret)
 		{
 			//It seems valid for a class to redefine only the setter, so if we can't find
@@ -849,11 +848,11 @@ private:
 		return ret;
 	}
 	
-	variable* findSettable(const multiname& name, bool* has_getter=NULL) DLL_LOCAL;
+	variable* findSettable(const multiname& name, bool* has_getter=nullptr) DLL_LOCAL;
 	multiname* proxyMultiName;
 	SystemState* sys;
 protected:
-	ASObject(MemoryAccount* m):objfreelist(NULL),Variables(m),varcount(0),classdef(NULL),proxyMultiName(NULL),sys(NULL),
+	ASObject(MemoryAccount* m):objfreelist(nullptr),Variables(m),classdef(nullptr),proxyMultiName(nullptr),sys(nullptr),
 		stringId(UINT32_MAX),type(T_OBJECT),subtype(SUBTYPE_NOT_SET),traitsInitialized(false),constructIndicator(false),constructorCallComplete(false),implEnable(true)
 	{
 #ifndef NDEBUG
@@ -879,7 +878,7 @@ protected:
 				std::map<const Class_base*, uint32_t> traitsMap,bool usedynamicPropertyWriter=true);
 	void setClass(Class_base* c);
 	static variable* findSettableImpl(SystemState* sys,variables_map& map, const multiname& name, bool* has_getter);
-	static FORCE_INLINE const variable* findGettableImplConst(SystemState* sys, const variables_map& map, const multiname& name, uint32_t* nsRealId = NULL)
+	static FORCE_INLINE const variable* findGettableImplConst(SystemState* sys, const variables_map& map, const multiname& name, uint32_t* nsRealId = nullptr)
 	{
 		const variable* ret=map.findObjVarConst(sys,name,DECLARED_TRAIT|DYNAMIC_TRAIT,nsRealId);
 		if(ret)
@@ -887,11 +886,11 @@ protected:
 			//It seems valid for a class to redefine only the setter, so if we can't find
 			//something to get, it's ok
 			if(!(asAtomHandler::isValid(ret->getter) || asAtomHandler::isValid(ret->var)))
-				ret=NULL;
+				ret=nullptr;
 		}
 		return ret;
 	}
-	static FORCE_INLINE variable* findGettableImpl(SystemState* sys, variables_map& map, const multiname& name, uint32_t* nsRealId = NULL)
+	static FORCE_INLINE variable* findGettableImpl(SystemState* sys, variables_map& map, const multiname& name, uint32_t* nsRealId = nullptr)
 	{
 		variable* ret=map.findObjVar(sys,name,DECLARED_TRAIT|DYNAMIC_TRAIT,nsRealId);
 		if(ret)
@@ -899,7 +898,7 @@ protected:
 			//It seems valid for a class to redefine only the setter, so if we can't find
 			//something to get, it's ok
 			if(!(asAtomHandler::isValid(ret->getter) || asAtomHandler::isValid(ret->var)))
-				ret=NULL;
+				ret=nullptr;
 		}
 		return ret;
 	}
@@ -913,18 +912,17 @@ protected:
 	   It has to call ASObject::destruct() as last instruction
 	   The destruct method must be callable multiple time with the same effects (no double frees).
 	*/
-	bool destruct();
+	bool destruct() override;
 	// called when object is really destroyed
 	virtual void destroy(){}
 
 	FORCE_INLINE bool destructIntern()
 	{
-		if (varcount)
-			destroyContents();
+		destroyContents();
 		if (proxyMultiName)
 		{
 			delete proxyMultiName;
-			proxyMultiName = NULL;
+			proxyMultiName = nullptr;
 		}
 		stringId = UINT32_MAX;
 		traitsInitialized =false;
@@ -1078,7 +1076,6 @@ public:
 	FORCE_INLINE void setDynamicVariableNoCheck(uint32_t nameID, asAtom& o)
 	{
 		Variables.setDynamicVarNoCheck(nameID,o);
-		++varcount;
 	}
 	/*
 	 * Called by ABCVm::buildTraits to create DECLARED_TRAIT or CONSTANT_TRAIT and set their type
@@ -1194,7 +1191,7 @@ public:
 	/* helpers for the dynamic property 'prototype' */
 	bool hasprop_prototype();
 	ASObject* getprop_prototype();
-	void setprop_prototype(_NR<ASObject>& prototype);
+	void setprop_prototype(_NR<ASObject>& prototype, uint32_t nameID=BUILTIN_STRINGS::PROTOTYPE);
 
 	//Comparison operators
 	virtual bool isEqual(ASObject* r);
@@ -1261,11 +1258,7 @@ public:
 	void setIsEnumerable(const multiname& name, bool isEnum);
 	inline void destroyContents()
 	{
-		if (varcount)
-		{
-			Variables.destroyContents();
-			varcount=0;
-		}
+		Variables.destroyContents();
 	}
 	CLASS_SUBTYPE getSubtype() const { return subtype;}
 	// copies all variables into the target
@@ -1393,6 +1386,7 @@ class Undefined;
 class Vector;
 class Vector3D;
 class VertexBuffer3D;
+class Video;
 class VideoTexture;
 class WaitableEvent;
 class WorkerDomain;
@@ -1431,7 +1425,7 @@ template<> inline bool ASObject::is<ConvolutionFilter>() const { return subtype=
 template<> inline bool ASObject::is<CubeTexture>() const { return subtype==SUBTYPE_CUBETEXTURE; }
 template<> inline bool ASObject::is<Date>() const { return subtype==SUBTYPE_DATE; }
 template<> inline bool ASObject::is<DisplacementFilter>() const { return subtype==SUBTYPE_DISPLACEMENTFILTER; }
-template<> inline bool ASObject::is<DisplayObject>() const { return subtype==SUBTYPE_DISPLAYOBJECT || subtype==SUBTYPE_INTERACTIVE_OBJECT || subtype==SUBTYPE_TEXTFIELD || subtype==SUBTYPE_BITMAP || subtype==SUBTYPE_DISPLAYOBJECTCONTAINER || subtype==SUBTYPE_STAGE || subtype==SUBTYPE_ROOTMOVIECLIP || subtype==SUBTYPE_SPRITE || subtype == SUBTYPE_MOVIECLIP || subtype == SUBTYPE_TEXTLINE; }
+template<> inline bool ASObject::is<DisplayObject>() const { return subtype==SUBTYPE_DISPLAYOBJECT || subtype==SUBTYPE_INTERACTIVE_OBJECT || subtype==SUBTYPE_TEXTFIELD || subtype==SUBTYPE_BITMAP || subtype==SUBTYPE_DISPLAYOBJECTCONTAINER || subtype==SUBTYPE_STAGE || subtype==SUBTYPE_ROOTMOVIECLIP || subtype==SUBTYPE_SPRITE || subtype == SUBTYPE_MOVIECLIP || subtype == SUBTYPE_TEXTLINE || subtype == SUBTYPE_VIDEO; }
 template<> inline bool ASObject::is<DisplayObjectContainer>() const { return subtype==SUBTYPE_DISPLAYOBJECTCONTAINER || subtype==SUBTYPE_STAGE || subtype==SUBTYPE_ROOTMOVIECLIP || subtype==SUBTYPE_SPRITE || subtype == SUBTYPE_MOVIECLIP || subtype == SUBTYPE_TEXTLINE; }
 template<> inline bool ASObject::is<DropShadowFilter>() const { return subtype==SUBTYPE_DROPSHADOWFILTER; }
 template<> inline bool ASObject::is<ElementFormat>() const { return subtype==SUBTYPE_ELEMENTFORMAT; }
@@ -1494,6 +1488,7 @@ template<> inline bool ASObject::is<Undefined>() const { return type==T_UNDEFINE
 template<> inline bool ASObject::is<Vector>() const { return subtype==SUBTYPE_VECTOR; }
 template<> inline bool ASObject::is<Vector3D>() const { return subtype==SUBTYPE_VECTOR3D; }
 template<> inline bool ASObject::is<VertexBuffer3D>() const { return subtype==SUBTYPE_VERTEXBUFFER3D; }
+template<> inline bool ASObject::is<Video>() const { return subtype==SUBTYPE_VIDEO; }
 template<> inline bool ASObject::is<VideoTexture>() const { return subtype==SUBTYPE_VIDEOTEXTURE; }
 template<> inline bool ASObject::is<WaitableEvent>() const { return subtype==SUBTYPE_WAITABLE_EVENT; }
 template<> inline bool ASObject::is<WorkerDomain>() const { return subtype==SUBTYPE_WORKERDOMAIN; }
@@ -1578,7 +1573,7 @@ FORCE_INLINE number_t asAtomHandler::toNumber(const asAtom& a)
 			return getObjectNoCheck(a)->toNumber();
 	}
 }
-FORCE_INLINE number_t asAtomHandler::AVM1toNumber(asAtom& a,int swfversion)
+FORCE_INLINE number_t asAtomHandler::AVM1toNumber(asAtom& a,bool usesActionScript3)
 {
 	switch(a.uintval&0x7)
 	{
@@ -1587,7 +1582,7 @@ FORCE_INLINE number_t asAtomHandler::AVM1toNumber(asAtom& a,int swfversion)
 		case ATOM_UINTEGER:
 			return a.uintval>>3;
 		case ATOM_INVALID_UNDEFINED_NULL_BOOL:
-			return (a.uintval&ATOMTYPE_BOOL_BIT) ? (a.uintval&0x80)>>7 : (a.uintval&ATOMTYPE_UNDEFINED_BIT) && swfversion >= 7 ? numeric_limits<double>::quiet_NaN() : 0;
+			return (a.uintval&ATOMTYPE_BOOL_BIT) ? (a.uintval&0x80)>>7 : (a.uintval&ATOMTYPE_UNDEFINED_BIT) && usesActionScript3 ? numeric_limits<double>::quiet_NaN() : 0;
 		case ATOM_STRINGID:
 		{
 			ASObject* s = abstract_s(getSys(),a.uintval>>3);
@@ -1669,6 +1664,8 @@ FORCE_INLINE void asAtomHandler::applyProxyProperty(asAtom& a,SystemState* sys,m
 		case ATOM_INTEGER:
 		case ATOM_UINTEGER:
 		case ATOM_INVALID_UNDEFINED_NULL_BOOL:
+		case ATOM_NUMBERPTR:
+		case ATOM_U_INTEGERPTR:
 			break;
 		case ATOM_STRINGID:
 			break; // no need to create string, as it won't have a proxyMultiName

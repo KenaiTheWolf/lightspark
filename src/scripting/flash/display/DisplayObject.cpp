@@ -97,8 +97,9 @@ bool DisplayObject::Render(RenderContext& ctxt, bool force)
 }
 
 DisplayObject::DisplayObject(Class_base* c):EventDispatcher(c),matrix(Class<Matrix>::getInstanceS(c->getSystemState())),tx(0),ty(0),rotation(0),
-	sx(1),sy(1),alpha(1.0),blendMode(BLENDMODE_NORMAL),isLoadedRoot(false),ClipDepth(0),maskOf(),parent(nullptr),constructed(false),useLegacyMatrix(true),onStage(false),
-	visible(true),mask(),invalidateQueueNext(),loaderInfo(),hasChanged(true),needsTextureRecalculation(true),legacy(false),flushstep(0),cacheAsBitmap(false),
+	sx(1),sy(1),alpha(1.0),blendMode(BLENDMODE_NORMAL),isLoadedRoot(false),ClipDepth(0),maskOf(),parent(nullptr),constructed(false),useLegacyMatrix(true),
+	needsTextureRecalculation(true),textureRecalculationSkippable(false),onStage(false),
+	visible(true),mask(),invalidateQueueNext(),loaderInfo(),loadedFrom(c->getSystemState()->mainClip),hasChanged(true),legacy(false),cacheAsBitmap(false),
 	name(BUILTIN_STRINGS::EMPTY)
 {
 	subtype=SUBTYPE_DISPLAYOBJECT;
@@ -118,8 +119,12 @@ void DisplayObject::finalize()
 	loaderInfo.reset();
 	invalidateQueueNext.reset();
 	accessibilityProperties.reset();
+	loadedFrom=getSystemState()->mainClip;
 	hasChanged = true;
 	needsTextureRecalculation=true;
+	if (!cachedSurface.isChunkOwner)
+		cachedSurface.tex=nullptr;
+	cachedSurface.isChunkOwner=true;
 }
 
 bool DisplayObject::destruct()
@@ -133,6 +138,8 @@ bool DisplayObject::destruct()
 	loaderInfo.reset();
 	invalidateQueueNext.reset();
 	accessibilityProperties.reset();
+	colorTransform.reset();
+	loadedFrom=getSystemState()->mainClip;
 	hasChanged = true;
 	needsTextureRecalculation=true;
 	tx=0;
@@ -157,7 +164,9 @@ bool DisplayObject::destruct()
 	avm1variables.clear();
 	variablebindings.clear();
 	avm1functions.clear();
-	flushstep=0;
+	if (!cachedSurface.isChunkOwner)
+		cachedSurface.tex=nullptr;
+	cachedSurface.isChunkOwner=true;
 	return EventDispatcher::destruct();
 }
 
@@ -309,7 +318,11 @@ void DisplayObject::setLegacyMatrix(const lightspark::MATRIX& m)
 		Locker locker(spinlock);
 		if (matrix.isNull())
 			matrix= _MR(Class<Matrix>::getInstanceS(this->getSystemState()));
-		if(matrix->matrix!=m)
+		if(m.getTranslateX() != tx ||
+			m.getTranslateY() != ty ||
+			m.getScaleX() != sx ||
+			m.getScaleY() != sy ||
+			m.getRotation() != rotation)
 		{
 			matrix->matrix=m;
 			extractValuesFromMatrix();
@@ -350,7 +363,7 @@ void DisplayObject::setMask(_NR<DisplayObject> m)
 	if(mustInvalidate && onStage)
 	{
 		hasChanged=true;
-		needsTextureRecalculation=true;
+//		needsTextureRecalculation=true;
 		requestInvalidation(getSystemState());
 	}
 }
@@ -473,13 +486,12 @@ bool DisplayObject::skipRender() const
 bool DisplayObject::defaultRender(RenderContext& ctxt) const
 {
 	// TODO: use scrollRect
-
 	const CachedSurface& surface=ctxt.getCachedSurface(this);
 	/* surface is only modified from within the render thread
 	 * so we need no locking here */
-	if(!surface.tex.isValid() || flushstep == getSystemState()->currentflushstep)
-		return flushstep == getSystemState()->currentflushstep;
-	if (surface.tex.width == 0 || surface.tex.height == 0)
+	if(!surface.tex || !surface.tex->isValid())
+		return true;
+	if (surface.tex->width == 0 || surface.tex->height == 0)
 		return true;
 	
 	AS_BLENDMODE bl = this->blendMode;
@@ -494,8 +506,8 @@ bool DisplayObject::defaultRender(RenderContext& ctxt) const
 	}
 	ctxt.setProperties(bl);
 	ctxt.lsglLoadIdentity();
-	ctxt.renderTextured(surface.tex, surface.xOffset,surface.yOffset,
-			surface.tex.width, surface.tex.height,
+	ctxt.renderTextured(*surface.tex, surface.xOffset,surface.yOffset,
+			surface.tex->width, surface.tex->height,
 			surface.alpha, RenderContext::RGB_MODE,
 			surface.rotation,surface.xOffsetTransformed,surface.yOffsetTransformed,surface.widthTransformed,surface.heightTransformed,surface.xscale, surface.yscale,
 			surface.redMultiplier, surface.greenMultiplier, surface.blueMultiplier, surface.alphaMultiplier,
@@ -1127,7 +1139,12 @@ ASFUNCTIONBODY_ATOM(DisplayObject,_setVisible)
 {
 	DisplayObject* th=asAtomHandler::as<DisplayObject>(obj);
 	assert_and_throw(argslen==1);
-	th->visible=asAtomHandler::Boolean_concrete(args[0]);
+	bool newval = asAtomHandler::Boolean_concrete(args[0]);
+	if (newval != th->visible)
+	{
+		th->visible=newval;
+		th->requestInvalidation(sys);
+	}
 }
 
 ASFUNCTIONBODY_ATOM(DisplayObject,_getVisible)
@@ -1162,7 +1179,7 @@ _NR<RootMovieClip> DisplayObject::getRoot()
 
 _NR<Stage> DisplayObject::getStage()
 {
-	if(!parent)
+	if(!parent || !this->onStage)
 		return NullRef;
 
 	return parent->getStage();
@@ -1301,6 +1318,11 @@ void DisplayObject::executeFrameScript()
 {
 }
 
+bool DisplayObject::needsActionScript3() const
+{
+	return this->loadedFrom->usesActionScript3;
+}
+
 void DisplayObject::constructionComplete()
 {
 	RELEASE_WRITE(constructed,true);
@@ -1312,10 +1334,19 @@ void DisplayObject::afterConstruction()
 		this->incRef();
 		loaderInfo->objectHasLoaded(_MR(this));
 	}
-	hasChanged=true;
+//	hasChanged=true;
+//	needsTextureRecalculation=true;
+//	if(onStage)
+//		requestInvalidation(getSystemState());
+}
+
+void DisplayObject::setNeedsTextureRecalculation(bool skippable)
+{
+	textureRecalculationSkippable=!needsTextureRecalculation && skippable;
 	needsTextureRecalculation=true;
-	if(onStage)
-		requestInvalidation(getSystemState());
+	if (!cachedSurface.isChunkOwner)
+		cachedSurface.tex=nullptr;
+	cachedSurface.isChunkOwner=true;
 }
 
 void DisplayObject::gatherMaskIDrawables(std::vector<IDrawable::MaskData>& masks) const
@@ -1511,7 +1542,7 @@ ASFUNCTIONBODY_ATOM(DisplayObject,hitTestPoint)
 multiname* DisplayObject::setVariableByMultiname(const multiname& name, asAtom& o, CONST_ALLOWED_FLAG allowConst, bool *alreadyset)
 {
 	multiname* res = EventDispatcher::setVariableByMultiname(name,o,allowConst,alreadyset);
-	if (!getSystemState()->mainClip->usesActionScript3)
+	if (!needsActionScript3())
 	{
 		if (name.name_s_id == BUILTIN_STRINGS::STRING_ONENTERFRAME ||
 				name.name_s_id == BUILTIN_STRINGS::STRING_ONLOAD)
@@ -1620,8 +1651,14 @@ ASFUNCTIONBODY_ATOM(DisplayObject,AVM1_getParent)
 }
 ASFUNCTIONBODY_ATOM(DisplayObject,AVM1_getRoot)
 {
-	sys->mainClip->incRef();
-	ret = asAtomHandler::fromObject(sys->mainClip);
+	DisplayObject* th=asAtomHandler::as<DisplayObject>(obj);
+	th->loadedFrom->incRef();
+	ret = asAtomHandler::fromObject(th->loadedFrom);
+}
+ASFUNCTIONBODY_ATOM(DisplayObject,AVM1_getURL)
+{
+	DisplayObject* th=asAtomHandler::as<DisplayObject>(obj);
+	ret = asAtomHandler::fromString(sys,th->loadedFrom->getOrigin().getURL());
 }
 ASFUNCTIONBODY_ATOM(DisplayObject,AVM1_hitTest)
 {
@@ -1834,6 +1871,14 @@ ASFUNCTIONBODY_ATOM(DisplayObject,AVM1_swapDepths)
 		DisplayObjectContainer::swapChildren(ret,sys,obj,newargs,2);
 	}
 }
+ASFUNCTIONBODY_ATOM(DisplayObject,AVM1_getDepth)
+{
+	DisplayObject* th=asAtomHandler::as<DisplayObject>(obj);
+	int r=0;
+	if (th->getParent())
+		r=th->getParent()->findLegacyChildDepth(th);
+	ret = asAtomHandler::fromInt(r);
+}
 
 void DisplayObject::AVM1SetupMethods(Class_base* c)
 {
@@ -1857,7 +1902,9 @@ void DisplayObject::AVM1SetupMethods(Class_base* c)
 	c->setDeclaredMethodByQName("_height","",Class<IFunction>::getFunction(c->getSystemState(),_setHeight),SETTER_METHOD,true);
 	c->setDeclaredMethodByQName("_parent","",Class<IFunction>::getFunction(c->getSystemState(),AVM1_getParent),GETTER_METHOD,true);
 	c->setDeclaredMethodByQName("_root","",Class<IFunction>::getFunction(c->getSystemState(),AVM1_getRoot),GETTER_METHOD,true);
+	c->setDeclaredMethodByQName("_url","",Class<IFunction>::getFunction(c->getSystemState(),AVM1_getURL),GETTER_METHOD,true);
 	c->setDeclaredMethodByQName("hitTest","",Class<IFunction>::getFunction(c->getSystemState(),AVM1_hitTest),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("hittest","",Class<IFunction>::getFunction(c->getSystemState(),AVM1_hitTest),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("localToGlobal","",Class<IFunction>::getFunction(c->getSystemState(),AVM1_localToGlobal),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("globalToLocal","",Class<IFunction>::getFunction(c->getSystemState(),AVM1_globalToLocal),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("getBytesLoaded","",Class<IFunction>::getFunction(c->getSystemState(),AVM1_getBytesLoaded),NORMAL_METHOD,true);
@@ -1870,6 +1917,7 @@ void DisplayObject::AVM1SetupMethods(Class_base* c)
 	c->setDeclaredMethodByQName("_alpha","",Class<IFunction>::getFunction(c->getSystemState(),AVM1_setAlpha),SETTER_METHOD,true);
 	c->setDeclaredMethodByQName("getBounds","",Class<IFunction>::getFunction(c->getSystemState(),AVM1_getBounds),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("swapDepths","",Class<IFunction>::getFunction(c->getSystemState(),AVM1_swapDepths),NORMAL_METHOD,true);
+	c->setDeclaredMethodByQName("getDepth","",Class<IFunction>::getFunction(c->getSystemState(),AVM1_getDepth),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("setMask","",Class<IFunction>::getFunction(c->getSystemState(),_setMask),NORMAL_METHOD,true);
 	c->setDeclaredMethodByQName("transform","",Class<IFunction>::getFunction(c->getSystemState(),_getTransform),GETTER_METHOD,true);
 	c->setDeclaredMethodByQName("_rotation","",Class<IFunction>::getFunction(c->getSystemState(),_getRotation),GETTER_METHOD,true);
@@ -1881,7 +1929,7 @@ DisplayObject *DisplayObject::AVM1GetClipFromPath(tiny_string &path)
 		return this;
 	if (path =="_root")
 	{
-		return getSystemState()->mainClip;
+		return loadedFrom;
 	}
 	if (path.startsWith("/"))
 	{
@@ -1941,14 +1989,14 @@ DisplayObject *DisplayObject::AVM1GetClipFromPath(tiny_string &path)
 	return nullptr;
 }
 
-void DisplayObject::AVM1SetVariable(tiny_string &name, asAtom v)
+void DisplayObject::AVM1SetVariable(tiny_string &name, asAtom v, bool setMember)
 {
 	if (name.empty())
 		return;
 	if (name.startsWith("/"))
 	{
 		tiny_string newpath = name.substr_bytes(1,name.numBytes()-1);
-		MovieClip* root = getSystemState()->mainClip;
+		MovieClip* root = loadedFrom;
 		if (root)
 			root->AVM1SetVariable(newpath,v);
 		else
@@ -1977,10 +2025,13 @@ void DisplayObject::AVM1SetVariable(tiny_string &name, asAtom v)
 				avm1functions[nameIdOriginal] = _MR(f);
 			}
 		}
-		multiname objName(NULL);
-		objName.name_type=multiname::NAME_STRING;
-		objName.name_s_id=nameIdOriginal;
-		setVariableByMultiname(objName,v, ASObject::CONST_ALLOWED);
+		if (setMember)
+		{
+			multiname objName(NULL);
+			objName.name_type=multiname::NAME_STRING;
+			objName.name_s_id=nameIdOriginal;
+			setVariableByMultiname(objName,v, ASObject::CONST_ALLOWED);
+		}
 		AVM1UpdateVariableBindings(nameId,v);
 	}
 	else if (pos == 0)
@@ -2012,7 +2063,7 @@ asAtom DisplayObject::AVM1GetVariable(const tiny_string &name)
 	uint32_t pos = name.find(":");
 	if (pos == tiny_string::npos)
 	{
-		if (getSystemState()->mainClip->version > 4 && getSystemState()->avm1global)
+		if (loadedFrom->version > 4 && getSystemState()->avm1global)
 		{
 			// first check for class names
 			asAtom ret=asAtomHandler::invalidAtom;
@@ -2057,7 +2108,7 @@ asAtom DisplayObject::AVM1GetVariable(const tiny_string &name)
 		}
 	}
 
-	if (getSystemState()->mainClip->version > 4)
+	if (loadedFrom->version > 4)
 	{
 		multiname m(nullptr);
 		m.name_type=multiname::NAME_STRING;
@@ -2065,7 +2116,7 @@ asAtom DisplayObject::AVM1GetVariable(const tiny_string &name)
 		m.isAttribute = false;
 		getVariableByMultiname(ret,m);
 		if (asAtomHandler::isInvalid(ret))// get Variable from root movie
-			getSystemState()->mainClip->getVariableByMultiname(ret,m);
+			loadedFrom->getVariableByMultiname(ret,m);
 	}
 	return ret;
 }
@@ -2131,7 +2182,11 @@ void DisplayObject::AVM1SetFunction(uint32_t nameID, _NR<AVM1Function> obj)
 {
 	auto it = avm1variables.find(nameID);
 	if (it != avm1variables.end())
+	{
+		if (obj && asAtomHandler::isObject(it->second) && asAtomHandler::getObjectNoCheck(it->second) == obj.getPtr())
+			return; // function is already set
 		ASATOM_DECREF(it->second);
+	}
 	if (obj)
 	{
 		obj->incRef();

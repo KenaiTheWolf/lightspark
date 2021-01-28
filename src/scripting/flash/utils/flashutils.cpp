@@ -281,7 +281,7 @@ ASFUNCTIONBODY_ATOM(lightspark,setInterval)
 	asAtom func = args[0];
 	uint32_t delayarg = 1;
 	asAtom o = asAtomHandler::nullAtom;
-	if (!asAtomHandler::isFunction(args[0]) && !sys->mainClip->usesActionScript3) // AVM1 also allows setInterval with arguments object,functionname,interval,params...
+	if (!asAtomHandler::isFunction(args[0])) // AVM1 also allows setInterval with arguments object,functionname,interval,params...
 	{
 		assert_and_throw(argslen >= 3);
 		
@@ -297,21 +297,27 @@ ASFUNCTIONBODY_ATOM(lightspark,setInterval)
 		if (asAtomHandler::isInvalid(func))
 		{
 			ASObject* pr = oref->getprop_prototype();
+			if (!pr)
+			{
+				multiname m2(nullptr);
+				m2.name_type=multiname::NAME_STRING;
+				m2.isAttribute = false;
+				m2.name_s_id= BUILTIN_STRINGS::STRING_PROTO;
+				asAtom p= asAtomHandler::invalidAtom;
+				oref->getVariableByMultiname(p,m2);
+				if (asAtomHandler::isObject(p))
+					pr = asAtomHandler::getObjectNoCheck(p);
+			}
 			if (pr)
 				pr->getVariableByMultiname(func,m);
 		}
 		assert_and_throw (asAtomHandler::isFunction(func));
 	}
-	if (sys->mainClip->usesActionScript3)
+	if (!asAtomHandler::is<AVM1Function>(func))
 		o = asAtomHandler::getClosureAtom(func);
 	else
 	{
-		if (argslen > paramstart)
-		{
-			o = args[paramstart];
-			paramstart++;
-		}
-		else
+		if (argslen <= paramstart)
 		{
 			// it seems that adobe uses the ObjectReference as "this" for the callback if no argument array is present
 			if (!asAtomHandler::isFunction(args[0]))

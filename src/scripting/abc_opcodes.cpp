@@ -1648,6 +1648,8 @@ bool ABCVm::getLex_multiname(call_context* th, multiname* name,uint32_t localres
 			canCache = false;
 
 		asAtom prop=asAtomHandler::invalidAtom;
+		if (s->is<Null>()) // avoid exception
+			continue;
 		s->getVariableByMultiname(prop,*name, opt);
 		if(asAtomHandler::isValid(prop))
 		{
@@ -3096,6 +3098,29 @@ bool ABCVm::instanceOf(ASObject* value, ASObject* type)
 			proto=proto->as<Function_object>()->functionPrototype.getPtr();
 			if(proto==functionProto)
 				return true;
+		}
+		if (value->is<DisplayObject>())
+		{
+			AVM1Function* constr = value->as<DisplayObject>()->loadedFrom->AVM1getClassConstructor(value->as<DisplayObject>()->getTagID());
+			bool res = type== constr;
+			if (!res)
+			{
+				ASObject* pr = constr->prototype.getPtr();
+				while (pr)
+				{
+					if (pr == functionProto)
+						return true;
+					pr=pr->getprop_prototype();
+				}
+			}
+			return type== value->as<DisplayObject>()->loadedFrom->AVM1getClassConstructor(value->as<DisplayObject>()->getTagID());
+		}
+		proto = value->getprop_prototype();
+		while(proto)
+		{
+			if(proto==functionProto)
+				return true;
+			proto=proto->getprop_prototype();
 		}
 		return false;
 	}

@@ -46,6 +46,7 @@ friend class Transform;
 friend class ParseThread;
 friend class Loader;
 friend class TextField;
+friend class Shape;
 friend std::ostream& operator<<(std::ostream& s, const DisplayObject& r);
 public:
 	enum HIT_TYPE { GENERIC_HIT, // point is over the object
@@ -91,6 +92,8 @@ private:
 	void setMatrix(_NR<Matrix> m);
 	ACQUIRE_RELEASE_FLAG(constructed);
 	bool useLegacyMatrix;
+	bool needsTextureRecalculation;
+	bool textureRecalculationSkippable;
 	void gatherMaskIDrawables(std::vector<IDrawable::MaskData>& masks) const;
 	std::map<uint32_t,asAtom> avm1variables;
 	std::map<uint32_t,_NR<AVM1Function>> avm1functions;
@@ -145,12 +148,16 @@ public:
 	ASPROPERTY_GETTER_SETTER(_NR<Array>,filters);
 	ASPROPERTY_GETTER_SETTER(_NR<Rectangle>,scrollRect);
 	_NR<ColorTransform> colorTransform;
+	void setNeedsTextureRecalculation(bool skippable=false);
+	void resetNeedsTextureRecalculation() { needsTextureRecalculation=false; }
+	bool getNeedsTextureRecalculation() const { return needsTextureRecalculation; }
+	bool getTextureRecalculationSkippable() const { return textureRecalculationSkippable; }
+	// this may differ from the main clip if this instance was generated from a loaded swf, not from the main clip
+	RootMovieClip* loadedFrom;
 	// this is reset after the drawjob is done to ensure a changed DisplayObject is only rendered once
 	bool hasChanged;
-	bool needsTextureRecalculation;
 	// this is set to true for DisplayObjects that are placed from a tag
 	bool legacy;
-	ATOMIC_INT32(flushstep);
 	/**
 	 * cacheAsBitmap is true also if any filter is used
 	 */
@@ -220,6 +227,7 @@ public:
 	virtual void declareFrame() {}
 	virtual void initFrame();
 	virtual void executeFrameScript();
+	virtual bool needsActionScript3() const;
 	Vector2f getLocalMousePos();
 	Vector2f getXY();
 	void setX(number_t x);
@@ -287,6 +295,7 @@ public:
 	ASFUNCTION_ATOM(AVM1_setScaleY);
 	ASFUNCTION_ATOM(AVM1_getParent);
 	ASFUNCTION_ATOM(AVM1_getRoot);
+	ASFUNCTION_ATOM(AVM1_getURL);
 	ASFUNCTION_ATOM(AVM1_hitTest);
 	ASFUNCTION_ATOM(AVM1_localToGlobal);
 	ASFUNCTION_ATOM(AVM1_globalToLocal);
@@ -298,9 +307,10 @@ public:
 	ASFUNCTION_ATOM(AVM1_setAlpha);
 	ASFUNCTION_ATOM(AVM1_getBounds);
 	ASFUNCTION_ATOM(AVM1_swapDepths);
+	ASFUNCTION_ATOM(AVM1_getDepth);
 	static void AVM1SetupMethods(Class_base* c);
 	DisplayObject* AVM1GetClipFromPath(tiny_string& path);
-	void AVM1SetVariable(tiny_string& name, asAtom v);
+	void AVM1SetVariable(tiny_string& name, asAtom v, bool setMember=true);
 	asAtom AVM1GetVariable(const tiny_string &name);
 	void AVM1UpdateVariableBindings(uint32_t nameID, asAtom &value);
 	asAtom getVariableBindingValue(const tiny_string &name) override;

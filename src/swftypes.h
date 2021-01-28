@@ -46,6 +46,7 @@ enum BUILTIN_STRINGS { EMPTY=0, STRING_WILDCARD='*', ANY=BUILTIN_STRINGS_CHAR_MA
 					   ,STRING_AVM1_TARGET,STRING_THIS,STRING_AVM1_ROOT,STRING_AVM1_PARENT,STRING_AVM1_GLOBAL,STRING_SUPER
 					   ,STRING_ONENTERFRAME,STRING_ONMOUSEMOVE,STRING_ONMOUSEDOWN,STRING_ONMOUSEUP,STRING_ONPRESS,STRING_ONRELEASE,STRING_ONRELEASEOUTSIDE,STRING_ONMOUSEWHEEL, STRING_ONLOAD
 					   ,STRING_OBJECT,STRING_UNDEFINED,STRING_BOOLEAN,STRING_NUMBER,STRING_STRING,STRING_FUNCTION_LOWERCASE,STRING_ONROLLOVER,STRING_ONROLLOUT
+					   ,STRING_PROTO
 					   ,LAST_BUILTIN_STRING };
 enum BUILTIN_NAMESPACES { EMPTY_NS=0, AS3_NS };
 
@@ -63,7 +64,7 @@ enum CLASS_SUBTYPE { SUBTYPE_NOT_SET, SUBTYPE_PROXY, SUBTYPE_REGEXP, SUBTYPE_XML
 					 ,SUBTYPE_CONTEXT3D,SUBTYPE_TEXTUREBASE,SUBTYPE_TEXTURE,SUBTYPE_CUBETEXTURE,SUBTYPE_RECTANGLETEXTURE,SUBTYPE_VIDEOTEXTURE,SUBTYPE_VECTOR3D,SUBTYPE_NETSTREAM
 					 ,SUBTYPE_WORKER,SUBTYPE_WORKERDOMAIN,SUBTYPE_MUTEX,SUBTYPE_AVM1FUNCTION,SUBTYPE_SAMPLEDATA_EVENT
 					 ,SUBTYPE_BITMAPFILTER,SUBTYPE_GLOWFILTER,SUBTYPE_DROPSHADOWFILTER,SUBTYPE_GRADIENTGLOWFILTER,SUBTYPE_BEVELFILTER,SUBTYPE_COLORMATRIXFILTER,SUBTYPE_BLURFILTER,SUBTYPE_CONVOLUTIONFILTER,SUBTYPE_DISPLACEMENTFILTER,SUBTYPE_GRADIENTBEVELFILTER,SUBTYPE_SHADERFILTER
-					 ,SUBTYPE_THROTTLE_EVENT,SUBTYPE_CONTEXTMENUEVENT,SUBTYPE_GAMEINPUTEVENT, SUBTYPE_GAMEINPUTDEVICE
+					 ,SUBTYPE_THROTTLE_EVENT,SUBTYPE_CONTEXTMENUEVENT,SUBTYPE_GAMEINPUTEVENT, SUBTYPE_GAMEINPUTDEVICE, SUBTYPE_VIDEO
 				   };
  
 enum STACK_TYPE{STACK_NONE=0,STACK_OBJECT,STACK_INT,STACK_UINT,STACK_NUMBER,STACK_BOOLEAN};
@@ -1481,6 +1482,7 @@ public:
 	bool explicit_FP;
 	bool creatingframe;
 	bool frameadvanced;
+	bool avm1ScriptExecutedAfterStop;
 	RunState();
 	inline void reset()
 	{
@@ -1491,9 +1493,10 @@ public:
 		explicit_FP = false;
 		creatingframe = false;
 		frameadvanced = false;
+		avm1ScriptExecutedAfterStop=false;
 	}
 };
-
+class Activation_object;
 class ACTIONRECORD
 {
 public:
@@ -1501,7 +1504,7 @@ public:
 	static asAtom PopStack(std::stack<asAtom>& stack);
 	static asAtom PeekStack(std::stack<asAtom>& stack);
 	static void executeActions(DisplayObject* clip, AVM1context* context, const std::vector<uint8_t> &actionlist, uint32_t startactionpos, std::map<uint32_t, union asAtom> &scopevariables, asAtom *result = nullptr, asAtom* obj = nullptr, asAtom *args = nullptr, uint32_t num_args=0, const std::vector<uint32_t>& paramnames=std::vector<uint32_t>(), const std::vector<uint8_t>& paramregisternumbers=std::vector<uint8_t>(),
-			bool preloadParent=false, bool preloadRoot=false, bool suppressSuper=true, bool preloadSuper=false, bool suppressArguments=false, bool preloadArguments=false, bool suppressThis=true, bool preloadThis=false, bool preloadGlobal=false,AVM1Function *caller = nullptr, AVM1Function *callee = nullptr);
+			bool preloadParent=false, bool preloadRoot=false, bool suppressSuper=true, bool preloadSuper=false, bool suppressArguments=false, bool preloadArguments=false, bool suppressThis=true, bool preloadThis=false, bool preloadGlobal=false, AVM1Function *caller = nullptr, AVM1Function *callee = nullptr, Activation_object *actobj=nullptr, asAtom* superobj=nullptr);
 };
 class BUTTONCONDACTION
 {
